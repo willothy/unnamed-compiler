@@ -165,6 +165,7 @@ pub enum Statement {
     },
 }
 
+/// A unary operator.
 pub enum UnaryOperator {
     /// Represents the - in a negation expression, such as `-foo`.
     Negate, // -
@@ -178,6 +179,7 @@ pub enum UnaryOperator {
     Ref, // &
 }
 
+/// A binary operator.
 pub enum BinaryOperator {
     // Arithmetic
     Add, // +
@@ -205,6 +207,7 @@ pub enum BinaryOperator {
     Xor,        // ^
 }
 
+/// An expression which results in a value.
 pub enum Expression {
     /// A primitive literal, such as `1`, `"foo"`, or `()`.
     Literal { value: Literal },
