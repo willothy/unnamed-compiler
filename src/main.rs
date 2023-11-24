@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
-/// Represents a full package with submodules.
+/// A full package with submodules.
 pub struct Module {
     pub name: String,
     pub submodules: Vec<Module>,
     pub declarations: HashMap<String, Declaration>,
 }
 
-/// Represents a module-level declaration.
+/// A module-level declaration.
 pub enum Declaration {
     Function {
         parameters: Vec<(String, TypeName)>,
@@ -84,7 +84,7 @@ pub enum TypePath {
     Unqualified(Vec<String>),
 }
 
-/// Represents a primitive literal value.
+/// A primitive literal value.
 pub enum Literal {
     /// A unit literal, denoted by `()`.
     Unit,
@@ -120,23 +120,23 @@ pub enum Literal {
     Bool(bool),
 }
 
-/// Represents a statement in a block.
+/// A statement in a block.
 pub enum Statement {
-    /// Represents a variable binding, such as `let foo = 1`.
+    /// A variable binding, such as `let foo = 1`.
     VariableBinding {
         pattern: LhsExpression,
         value: Expression,
     },
-    /// Represents a destructuring assignment, such as `let (x, y) = foo`.
+    /// A destructuring assignment, such as `let (x, y) = foo`.
     DestructuringAssignment {
         pattern: LhsExpression,
         value: Expression,
     },
-    /// Represents an expression statement, such as `foo(1, 2)`.
+    /// An expression statement, such as `foo(1, 2)`.
     Expression(Expression),
-    /// Represents a return statement, such as `return 1`.
+    /// A return statement, such as `return 1`.
     Return(Expression),
-    /// Represents a break statement, such as `break` or `break 5`.
+    /// A break statement, such as `break` or `break 5`.
     Break {
         /// Optional label to break out of. For example, in `foo: loop { break foo }`, `foo` is the label. If not
         /// specified, breaks out of the innermost loop.
@@ -148,15 +148,15 @@ pub enum Statement {
         /// compile time.
         value: Option<Expression>,
     },
-    /// Represents a continue statement in a loop.
+    /// A continue statement in a loop.
     Continue,
-    /// Represents a while loop, such as `while foo { bar }`.
+    /// A while loop, such as `while foo { bar }`.
     While {
         label: Option<String>,
         condition: Expression,
         body: Expression,
     },
-    /// Represents a for loop, such as `for x in foo { bar }`.
+    /// A for loop, such as `for x in foo { bar }`.
     For {
         label: Option<String>,
         pattern: LhsExpression,
@@ -206,7 +206,7 @@ pub enum BinaryOperator {
 }
 
 pub enum Expression {
-    /// Represents a primitive literal, such as `1`, `"foo"`, or `()`.
+    /// A primitive literal, such as `1`, `"foo"`, or `()`.
     Literal { value: Literal },
     /// Represents the use of a variable, such as `foo`.
     Variable { name: String },
@@ -219,24 +219,24 @@ pub enum Expression {
         left: Box<Expression>,
         right: Box<Expression>,
     },
-    /// Represents a call expression, such as `foo(1, 2)`.
+    /// A call expression, such as `foo(1, 2)`.
     Call {
         function: Box<Expression>,
         arguments: Vec<Expression>,
     },
-    /// Represents a struct init (or struct literal), such as `Point { x: 1, y: 2 }`.
+    /// A struct init (or struct literal), such as `Point { x: 1, y: 2 }`.
     StructInit {
         ty: TypeName,
         fields: Vec<(String, Expression)>,
     },
-    /// Represents an array init (or array literal), such as `[1, 2]`.
+    /// An array init (or array literal), such as `[1, 2]`.
     ArrayInit {
         ty: TypeName,
         elements: Vec<Expression>,
     },
-    /// Represents a tuple init (or tuple literal), such as `(1, 2)`.
+    /// A tuple init (or tuple literal), such as `(1, 2)`.
     TupleInit { fields: Vec<Expression> },
-    /// Represents a struct field access expression. For example, in `foo.bar`, `foo` (the
+    /// A struct field access expression. For example, in `foo.bar`, `foo` (the
     /// `struct_expr`) is an `Expression::Variable`, and `bar` is the `field` in `Expression::FieldAccess`.
     StructAccess {
         struct_expr: Box<Expression>,
@@ -246,31 +246,31 @@ pub enum Expression {
         array_expr: Box<Expression>,
         index_expr: Box<Expression>,
     },
-    /// Represents a tuple field access expression. For example, in `foo.0`, `foo` (the `tuple_expr`) is
+    /// A tuple field access expression. For example, in `foo.0`, `foo` (the `tuple_expr`) is
     /// an `Expression::Variable`, and `0` is the `index` in `Expression::TupleFieldAccess`.
     TupleAccess {
         tuple_expr: Box<Expression>,
         index: usize,
     },
-    /// Represents a block expression, such as `{ foo; bar }`.
+    /// A block expression, such as `{ foo; bar }`.
     Block {
         statements: Vec<Statement>,
         /// The value of the block is the value of the last statement in the block.
         value: Box<Expression>,
     },
-    /// Represents a match expression, such as `match foo { 1 => 2, _ => 3 }`.
+    /// A match expression, such as `match foo { 1 => 2, _ => 3 }`.
     Match {
         value: Box<Expression>,
         arms: Vec<MatchArm>,
     },
-    /// Represents an if expression, such as `if foo { 1 } else { 2 }`.
+    /// An if expression, such as `if foo { 1 } else { 2 }`.
     If {
         condition: Box<Expression>,
         then: Box<Expression>,
         // Required for if-else expressions, optional in expression statements.
         otherwise: Option<Box<Expression>>,
     },
-    /// Represents a loop expression, such as `loop { break foo; }`.
+    /// A loop expression, such as `loop { break foo; }`.
     Loop { body: Box<Expression> },
 }
 
@@ -279,22 +279,22 @@ pub struct MatchArm {
     pub body: Expression,
 }
 
-/// Represents a type expression in pattern matching, or a left-hand side expression in a destructuring assignment.
+/// A type expression in pattern matching, or a left-hand side expression in a destructuring assignment.
 pub enum LhsExpression {
-    /// Represents a unit literal in a pattern. For example, in
+    /// A unit literal in a pattern. For example, in
     /// `() = foo`, `()` is a `LhsExpression::Unit`.
     ///
     /// NOTE: Not allowed in destructuring assignments.
     Unit,
-    /// Represents a wildcard in a destructuring assignment. For example, in `let (_, y) = foo`,
+    /// A wildcard in a destructuring assignment. For example, in `let (_, y) = foo`,
     /// `_` is a `LhsExpression::Wildcard`.
     Wildcard,
-    /// Represents a variable binding in pattern matching or assignment. For example, in
+    /// A variable binding in pattern matching or assignment. For example, in
     /// `foo = 1`, `foo` is a `LhsExpression::Variable`. Also applies to destructuring, where the
     /// variable is bound to the value being destructured. For example, in
     /// `let (x, y) = foo`, `x` and `y` are both `LhsExpression::Variable`s.
     Variable(String),
-    /// Represents a field access on the left-hand side of an assignment. For example, in
+    /// A field access on the left-hand side of an assignment. For example, in
     /// `foo.bar = 1`, `foo.bar` is a `LhsExpression::FieldAccess`.
     ///
     /// NOTE: Not allowed to be nested inside a struct or tuple destructuring, or in pattern matching.
@@ -302,20 +302,20 @@ pub enum LhsExpression {
         struct_expr: Expression,
         field: String,
     },
-    /// Represents a tuple field access on the left-hand side of an assignment. For example, in
+    /// A tuple field access on the left-hand side of an assignment. For example, in
     /// `foo.0 = 1`, `foo.0` is a `LhsExpression::TupleAccess`.
     TupleAccess {
         tuple_expr: Expression,
         index: usize,
     },
-    /// Represents an index access on the left-hand side of an assignment. For example, in
+    /// An index access on the left-hand side of an assignment. For example, in
     /// `foo[0] = 1`, `foo[0]` is a `LhsExpression::IndexAccess`.
     /// NOTE: Not allowed to be nested inside a struct or tuple destructuring, or in pattern matching.
     IndexAccess {
         array_expr: Expression,
         index_expr: Expression,
     },
-    /// Represents a call expression on the left-hand side of an assignment. For example, in
+    /// A call expression on the left-hand side of an assignment. For example, in
     /// `*foo(1) = 1`, `foo(1)` is a `LhsExpression::Call` containing a `LhsExpression::Variable`.
     /// NOTE: Not allowed to be nested inside a struct or tuple destructuring, or in pattern matching.
     /// Must be nested inside a `LhsExpression::Deref`, `LhsExpression::FieldAccess` or similar.
@@ -323,12 +323,12 @@ pub enum LhsExpression {
         function: Expression,
         arguments: Vec<Expression>,
     },
-    /// Represents a dereference on the left-hand side of an assignment. For example, in
+    /// A dereference on the left-hand side of an assignment. For example, in
     /// `*foo = 1`, `*foo` is a `LhsExpression::Deref` containing a `LhsExpression::Variable`.
     ///
     /// NOTE: Not allowed to be nested inside a struct or tuple destructuring, or in pattern matching.
     Deref { inner: Expression },
-    /// Represents a struct destructuring on the left-hand side of an assignment. For example, in
+    /// A struct destructuring on the left-hand side of an assignment. For example, in
     /// `let Point { x, y } = foo`, `Point { x, y }` is a `LhsExpression::Struct` containing two
     /// `LhsExpression::Variable`s.
     Struct {
@@ -337,10 +337,10 @@ pub enum LhsExpression {
         /// origin is destructured into `x` and `y`, and size is bound directly to `size`.
         fields: Vec<LhsExpression>,
     },
-    /// Represents a tuple destructuring on the left-hand side of an assignment, such as
+    /// A tuple destructuring on the left-hand side of an assignment, such as
     /// `let (x, y) = foo`.
     Tuple(Vec<LhsExpression>),
-    /// Represents an enum variant destructuring on the left-hand side of an assignment. For
+    /// An enum variant destructuring on the left-hand side of an assignment. For
     /// example, in `let Some(x) = foo`, `Some(x)` is a `LhsExpression::EnumVariant` containing a
     /// `LhsExpression::Variable`.
     EnumVariant {
