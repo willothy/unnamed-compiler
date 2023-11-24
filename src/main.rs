@@ -298,9 +298,15 @@ pub enum LhsExpression {
     /// `foo.bar = 1`, `foo.bar` is a `LhsExpression::FieldAccess`.
     ///
     /// NOTE: Not allowed to be nested inside a struct or tuple destructuring, or in pattern matching.
-    FieldAccess {
+    StructAccess {
         struct_expr: Expression,
         field: String,
+    },
+    /// Represents a tuple field access on the left-hand side of an assignment. For example, in
+    /// `foo.0 = 1`, `foo.0` is a `LhsExpression::TupleAccess`.
+    TupleAccess {
+        tuple_expr: Expression,
+        index: usize,
     },
     /// Represents an index access on the left-hand side of an assignment. For example, in
     /// `foo[0] = 1`, `foo[0]` is a `LhsExpression::IndexAccess`.
