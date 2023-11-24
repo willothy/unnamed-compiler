@@ -277,6 +277,8 @@ pub enum Expression {
     Loop { body: Box<Expression> },
 }
 
+/// An arm in a match expression. For example, in `match foo { 1 => 2, _ => 3 }`, `1 => 2` is a
+/// `MatchArm`.
 pub struct MatchArm {
     pub pattern: LhsExpression,
     pub body: Expression,
