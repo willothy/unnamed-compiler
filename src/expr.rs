@@ -1,17 +1,15 @@
 use std::{borrow::Cow, collections::BTreeMap};
 
 use chumsky::{
-    primitive::{choice, just, none_of, todo},
-    recovery::{self, Strategy},
+    primitive::{choice, just, none_of, one_of},
     recursive::recursive,
-    select,
-    text::{ident, keyword, whitespace},
+    text::{ident, keyword},
     IterParser, Parser,
 };
 
 use crate::{
     stmt::{BinaryOp, Stmt, UnaryOp},
-    ty::TypeSignature,
+    ty::{TypePath, TypeSignature},
     util::comma_separated,
     NodeParser,
 };
@@ -46,7 +44,7 @@ pub enum Literal<'a> {
     /// A tuple literal, e.g. `(1, 2, 3)`
     Tuple(Vec<Expr<'a>>),
     /// A struct literal / initializer, e.g. `Struct { field: 42 }`
-    Struct(BTreeMap<&'a str, Expr<'a>>),
+    Struct(TypePath<'a>, BTreeMap<&'a str, Expr<'a>>),
     /// An array initializer, e.g. `[1, 2, 3]`
     Array(Vec<Expr<'a>>),
 }
@@ -132,33 +130,6 @@ impl<'a> NodeParser<'a, Self> for Literal<'a> {
             .map(|_| Literal::Boolean(true))
             .or(just("false").map(|_| Literal::Boolean(false)));
 
-        // TODO: Expr parser
-
-        // let tuple = comma_separated(Expr::parser())
-        //     .delimited_by(just("("), just(")"))
-        //     .map(Literal::Tuple);
-
-        // let array = comma_separated(Expr::parser())
-        //     .delimited_by(just("["), just("]"))
-        //     .map(Literal::Array);
-        //
-        // let struct_field = ident()
-        //     .then_ignore(just(":"))
-        //     .then(Expr::parser())
-        //     .map(|(name, value)| (name, value));
-        //
-        // let struct_ = ident()
-        //     .then_ignore(just("{"))
-        //     .then(comma_separated(struct_field))
-        //     .then_ignore(just("}"))
-        //     .map(|(name, fields)| {
-        //         let mut map = BTreeMap::new();
-        //         for (name, value) in fields {
-        //             map.insert(name, value);
-        //         }
-        //         Literal::Struct(map)
-        //     });
-
         choice((
             unit,    //
             float,   //
@@ -173,8 +144,8 @@ impl<'a> NodeParser<'a, Self> for Literal<'a> {
 
 #[derive(Debug, PartialEq)]
 pub struct MatchArm<'a> {
-    pattern: Expr<'a>,
-    body: Expr<'a>,
+    pub pattern: Expr<'a>,
+    pub body: Expr<'a>,
 }
 
 /// Represents an expression at parse level.
@@ -201,8 +172,15 @@ pub enum Expr<'a> {
     ///
     /// The last expression in the block is used as the return value,
     /// but early returns are allowed with the `return` statement.
-    Block(Vec<Stmt<'a>>, Box<Expr<'a>>),
-    If(Box<Expr<'a>>, Box<Expr<'a>>, Option<Box<Expr<'a>>>),
+    Block {
+        body: Vec<Stmt<'a>>,
+        terminator: Box<Expr<'a>>,
+    },
+    If {
+        cond: Box<Expr<'a>>,
+        body: Box<Expr<'a>>,
+        alternate: Option<Box<Expr<'a>>>,
+    },
     /// Rust-style loops work as expressions, but *must* yield a value
     /// if used as such.
     Loop(Box<Expr<'a>>),
@@ -217,92 +195,198 @@ pub enum Expr<'a> {
 
 impl<'a> NodeParser<'a, Self> for Expr<'a> {
     fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
-        recursive(|this| {
+        recursive(|expr| {
             let literal = Literal::parser().map(Expr::Literal);
 
-            let r#if = keyword("if")
-                .ignore_then(this.clone())
-                .then(this.clone())
-                .then(keyword("else").ignore_then(this.clone()).or_not())
-                .map(|((cond, body), else_body)| {
-                    return Expr::If(Box::new(cond), Box::new(body), else_body.map(Box::new));
-                });
-
-            let r#loop = keyword("loop")
-                .ignore_then(this.clone())
-                .map(Box::new)
-                .map(Expr::Loop);
-
-            let r#break = keyword("break")
-                .then(this.clone().or_not())
-                .map(|(_, val)| Expr::Break(val.map(Box::new)));
-
-            let index = this
-                .clone()
-                .then(just("[").ignore_then(this.clone()))
-                .then_ignore(just("]"))
-                .map(|(lhs, rhs)| Expr::Index(Box::new(lhs), Box::new(rhs)));
-
-            let struct_field = this
-                .clone()
-                .then(just(".").ignore_then(ident()))
-                .map(|(lhs, rhs)| Expr::StructField(Box::new(lhs), rhs));
-
-            let tuple_field = this
-                .clone()
-                .then(just(".").ignore_then(chumsky::text::int(10)))
-                .map(|(lhs, rhs)| {
-                    let rhs = str::parse::<usize>(&rhs).unwrap();
-                    Expr::TupleField(Box::new(lhs), rhs)
-                });
-
-            let ident = ident().padded().map(Expr::Identifier);
-
             let r#match = keyword("match")
-                .ignore_then(this.clone().padded())
-                .then(comma_separated(
-                    this.clone()
-                        .then_ignore(just("=>"))
-                        .then(this.clone())
-                        .map(|(pattern, body)| MatchArm { pattern, body }),
-                ))
-                .delimited_by(just("{"), just("}"))
+                .padded()
+                .ignore_then(expr.clone().padded())
+                .then(
+                    expr.clone()
+                        .then_ignore(just("=>").padded())
+                        .then(expr.clone().padded())
+                        .map(|(pattern, body)| MatchArm { pattern, body })
+                        .separated_by(just(",").padded())
+                        .allow_trailing()
+                        .collect::<Vec<_>>()
+                        .delimited_by(just("{").padded(), just("}").padded()),
+                )
+                .padded()
                 .map(|(value, arms)| Expr::Match {
                     value: Box::new(value),
                     arms,
                 });
 
-            // let block = this
-            //     .clone()
+            let r#let = keyword("let")
+                .ignore_then(expr.clone().padded())
+                .then(
+                    just(":")
+                        .padded()
+                        .ignore_then(TypeSignature::parser())
+                        .or_not(),
+                )
+                .then(just("=").padded().ignore_then(expr.clone()).or_not())
+                .map(|((lhs, ty), rhs)| Stmt::Let(lhs, ty, rhs));
+
+            let assignment = expr
+                .clone()
+                .padded()
+                .then_ignore(just("=").padded())
+                .then(expr.clone())
+                .map(|(lhs, rhs)| Stmt::Assignment(lhs, rhs));
+
+            let r#return = keyword("return")
+                .ignore_then(expr.clone().padded())
+                .map(Stmt::Return);
+
+            let block = recursive(|block| {
+                let r#while = keyword("while")
+                    .ignore_then(expr.clone())
+                    .then(block.clone())
+                    .map(|(cond, body)| Stmt::While {
+                        condition: cond,
+                        body,
+                    });
+
+                let r#for = keyword("for")
+                    .ignore_then(expr.clone().padded())
+                    .then_ignore(keyword("in").padded())
+                    .then(expr.clone().padded())
+                    .then(block.clone())
+                    .map(|((pattern, iter), body)| Stmt::For {
+                        pattern,
+                        iter,
+                        body,
+                    });
+
+                let stmt = choice((
+                    r#let,      //
+                    assignment, //
+                    r#return,
+                    r#while,
+                    r#for,
+                    expr.clone().map(Stmt::Expression),
+                ))
+                .then_ignore(one_of(";\n"))
+                .padded();
+
+                stmt.repeated()
+                    .collect::<Vec<_>>()
+                    .then(expr.clone())
+                    .delimited_by(just("{").padded(), just("}").padded())
+                    .map(|(x, terminator)| {
+                        // let terminator = x.pop().expect("block to have a terminator");
+
+                        Expr::Block {
+                            body: x,
+                            terminator: Box::new(terminator),
+                        }
+                    })
+            });
+
+            let r#loop = keyword("loop")
+                .ignore_then(block.clone())
+                .map(Box::new)
+                .map(Expr::Loop);
+
+            let r#break = keyword("break")
+                .then(expr.clone().or_not())
+                .map(|(_, val)| Expr::Break(val.map(Box::new)));
+
+            // let block = stmt
             //     .repeated()
-            //     .at_least(1)
             //     .collect::<Vec<_>>()
-            //     .delimited_by(just("{"), just("}"))
-            //     .map(|mut x| {
-            //         let terminator = x.pop().expect("block to have a terminator");
+            //     .then(expr.clone())
+            //     .delimited_by(just("{").padded(), just("}").padded())
+            //     .map(|(x, terminator)| {
+            //         // let terminator = x.pop().expect("block to have a terminator");
             //
-            //         Expr::Block(x, Box::new(terminator))
+            //         Expr::Block {
+            //             body: x,
+            //             terminator: Box::new(terminator),
+            //         }
             //     });
 
+            let r#if = recursive(|r#if| {
+                keyword("if")
+                    .padded()
+                    .ignore_then(expr.clone())
+                    .then(block.clone())
+                    .then(
+                        keyword("else")
+                            .ignore_then(r#if.clone().or(block.clone()))
+                            .or_not()
+                            .padded(),
+                    )
+                    .map(|((cond, body), else_body)| {
+                        return Expr::If {
+                            cond: Box::new(cond),
+                            body: Box::new(body),
+                            alternate: else_body.map(Box::new),
+                        };
+                    })
+            });
+
+            // (,) is the same as () because... reasons
+            let unit = just(",")
+                .or_not()
+                .delimited_by(just("("), just(")"))
+                .map(|_| Literal::Unit)
+                .map(Expr::Literal);
+
+            let tuple = expr
+                .clone()
+                .padded()
+                .separated_by(just(","))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just("("), just(")"))
+                .map(Literal::Tuple)
+                .map(Expr::Literal);
+
+            let array = comma_separated(expr.clone())
+                .delimited_by(just("["), just("]"))
+                .map(Literal::Array)
+                .map(Expr::Literal);
+
+            let struct_field = ident()
+                .then_ignore(just(":").padded())
+                .then(expr.clone())
+                .map(|(name, value)| (name, value));
+
+            let struct_ = TypePath::parser()
+                .then_ignore(just("{").padded())
+                .then(
+                    struct_field
+                        .separated_by(just(",").padded())
+                        .allow_trailing()
+                        .collect::<Vec<_>>()
+                        .map(BTreeMap::from_iter)
+                        .boxed(),
+                )
+                .then_ignore(just("}").padded())
+                .map(|(name, fields)| Literal::Struct(name, BTreeMap::from_iter(fields)))
+                .map(Expr::Literal);
+
             let atom = choice((
-                literal, //
-                r#loop,  //
-                r#if,    //
-                r#break, //
+                literal,
+                r#loop,
+                r#if,
+                r#break,
                 r#match,
-                ident, //
-                       // block,   //
-                       // struct_field,
-                       // index,
-                       // tuple_field,
-                       // call,
-                       // this.clone().padded().delimited_by(just("("), just(")")),
+                tuple,
+                array,
+                struct_,
+                unit,
+                ident().padded().map(Expr::Identifier),
+                block,
+                expr.clone().padded().delimited_by(just("("), just(")")),
             ))
             .boxed();
 
             let call = atom
                 .foldl(
-                    this.clone()
+                    expr.clone()
                         .separated_by(just(','))
                         .allow_trailing()
                         .collect::<Vec<_>>()
@@ -315,8 +399,21 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                 .boxed();
 
             let index_access = call.foldl(
-                this.clone().delimited_by(just("["), just("]")).repeated(),
+                expr.clone().delimited_by(just("["), just("]")).repeated(),
                 |lhs, rhs| Expr::Index(Box::new(lhs), Box::new(rhs)),
+            );
+
+            let field_access = index_access
+                .foldl(just(".").ignore_then(ident()).repeated(), |lhs, rhs| {
+                    Expr::StructField(Box::new(lhs), rhs)
+                });
+
+            let tuple_access = field_access.foldl(
+                just(".").ignore_then(chumsky::text::int(10)).repeated(),
+                |lhs, rhs| {
+                    let rhs = str::parse::<usize>(&rhs).unwrap();
+                    Expr::TupleField(Box::new(lhs), rhs)
+                },
             );
 
             let unary_op = just("-")
@@ -329,7 +426,7 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                 unary_op
                     .then(unary)
                     .map(|(op, expr)| Expr::Unary(op, Box::new(expr)))
-                    .or(index_access)
+                    .or(tuple_access)
             })
             .boxed();
 

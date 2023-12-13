@@ -1,5 +1,6 @@
 use chumsky::{
-    primitive::{choice, just},
+    primitive::{choice, just, one_of},
+    text::keyword,
     Parser,
 };
 
@@ -8,7 +9,7 @@ use crate::{expr::Expr, ty::TypeSignature, NodeParser};
 #[derive(Debug, PartialEq)]
 pub enum Stmt<'a> {
     /// A let binding, e.g. `let x: int = 42;`
-    Let(&'a str, Option<TypeSignature<'a>>, Option<Expr<'a>>),
+    Let(Expr<'a>, Option<TypeSignature<'a>>, Option<Expr<'a>>),
     /// An assignment, e.g. `x = 42;` or `let Point { x, y } = point;`
     Assignment(Expr<'a>, Expr<'a>),
     /// A return statement
@@ -24,6 +25,42 @@ pub enum Stmt<'a> {
         iter: Expr<'a>,
         body: Expr<'a>,
     },
+}
+
+impl<'a> NodeParser<'a, Stmt<'a>> for Stmt<'a> {
+    fn parser() -> impl Parser<'a, &'a str, Self> + Clone {
+        let r#let = keyword("let")
+            .ignore_then(Expr::parser().padded())
+            .then(
+                just(":")
+                    .padded()
+                    .ignore_then(TypeSignature::parser())
+                    .or_not(),
+            )
+            .then(just("=").padded().ignore_then(Expr::parser()).or_not())
+            .map(|((lhs, ty), rhs)| Self::Let(lhs, ty, rhs));
+
+        let assignment = Expr::parser()
+            .padded()
+            .then_ignore(just("=").padded())
+            .then(Expr::parser())
+            .map(|(lhs, rhs)| Self::Assignment(lhs, rhs));
+
+        let r#return = keyword("return")
+            .ignore_then(Expr::parser())
+            .map(Self::Return);
+
+        choice((
+            r#let,      //
+            assignment, //
+            r#return,
+            // Self::return_stmt(),
+            // Self::while_loop(),
+            // Self::for_loop(),
+            // Self::expression(),
+        ))
+        .then_ignore(one_of(";\n").or_not())
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

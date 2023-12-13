@@ -1,11 +1,11 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use chumsky::{IterParser, Parser};
 use crane::{
     expr::{Expr, Literal},
     stmt::{BinaryOp, UnaryOp},
     ty::{TypePath, TypePathSegment, TypeSignature},
-    *,
+    NodeParser as _,
 };
 
 #[test]
@@ -322,5 +322,237 @@ fn test_index_expr() {
             Box::new(Expr::Identifier("foo")),
             Box::new(Expr::Literal(Literal::Integer(42)))
         )
+    );
+}
+
+#[test]
+fn parse_struct_access_expr() {
+    let input = "foo.bar";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::StructField(Box::new(Expr::Identifier("foo")), "bar")
+    );
+
+    let input = "foo.bar.baz";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::StructField(
+            Box::new(Expr::StructField(Box::new(Expr::Identifier("foo")), "bar")),
+            "baz"
+        )
+    );
+
+    let input = "foo().bar";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::StructField(
+            Box::new(Expr::Call(Box::new(Expr::Identifier("foo")), vec![])),
+            "bar"
+        )
+    );
+}
+
+#[test]
+fn test_tuple_access_expr() {
+    let input = "foo.0";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::TupleField(Box::new(Expr::Identifier("foo")), 0)
+    );
+
+    let input = "foo.0.1";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::TupleField(
+            Box::new(Expr::TupleField(Box::new(Expr::Identifier("foo")), 0)),
+            1
+        )
+    );
+
+    let input = "foo().0";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::TupleField(
+            Box::new(Expr::Call(Box::new(Expr::Identifier("foo")), vec![])),
+            0
+        )
+    );
+}
+
+#[test]
+fn parse_tuple_init_expr() {
+    let input = "(1, 2, 3)";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::Literal(Literal::Tuple(vec![
+            Expr::Literal(Literal::Integer(1)),
+            Expr::Literal(Literal::Integer(2)),
+            Expr::Literal(Literal::Integer(3)),
+        ]))
+    );
+
+    let input = "(1, 2, 3,)";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::Literal(Literal::Tuple(vec![
+            Expr::Literal(Literal::Integer(1)),
+            Expr::Literal(Literal::Integer(2)),
+            Expr::Literal(Literal::Integer(3)),
+        ]))
+    );
+
+    let input = "(1,)";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::Literal(Literal::Tuple(vec![Expr::Literal(Literal::Integer(1)),]))
+    );
+
+    let input = "(,)";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output().unwrap(), &Expr::Literal(Literal::Unit));
+}
+
+#[test]
+fn pare_struct_init() {
+    let input = "Foo { bar: 42 }";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::Literal(Literal::Struct(
+            TypePath {
+                name: "Foo",
+                path: None
+            },
+            BTreeMap::from_iter([("bar", Expr::Literal(Literal::Integer(42)))])
+        ))
+    );
+
+    let input = "Foo { bar: 42, }";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::Literal(Literal::Struct(
+            TypePath {
+                name: "Foo",
+                path: None
+            },
+            BTreeMap::from_iter([("bar", Expr::Literal(Literal::Integer(42)))])
+        ))
+    );
+
+    let input = "Foo { bar: 42, baz: 3.14 }";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::Literal(Literal::Struct(
+            TypePath {
+                name: "Foo",
+                path: None
+            },
+            BTreeMap::from_iter([
+                ("bar", Expr::Literal(Literal::Integer(42))),
+                ("baz", Expr::Literal(Literal::Float(3.14)))
+            ])
+        ))
+    );
+}
+
+#[test]
+fn test_if_expr() {
+    let input = "if foo { 42 }";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::If {
+            cond: Box::new(Expr::Identifier("foo")),
+            body: Box::new(Expr::Block {
+                body: vec![],
+                terminator: Box::new(Expr::Literal(Literal::Integer(42)))
+            }),
+            alternate: None,
+        }
+    );
+
+    let input = "if foo { 42 } else { 3.14 }";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::If {
+            cond: Box::new(Expr::Identifier("foo")),
+            body: Box::new(Expr::Block {
+                body: vec![],
+                terminator: Box::new(Expr::Literal(Literal::Integer(42)))
+            }),
+            alternate: Some(Box::new(Expr::Block {
+                body: vec![],
+                terminator: Box::new(Expr::Literal(Literal::Float(3.14)))
+            })),
+        }
+    );
+
+    let input = "if foo { 42 } else if bar { 3.14 } else { 0 }";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::If {
+            cond: Box::new(Expr::Identifier("foo")),
+            body: Box::new(Expr::Block {
+                body: vec![],
+                terminator: Box::new(Expr::Literal(Literal::Integer(42)))
+            }),
+            alternate: Some(Box::new(Expr::If {
+                cond: Box::new(Expr::Identifier("bar")),
+                body: Box::new(Expr::Block {
+                    body: vec![],
+                    terminator: Box::new(Expr::Literal(Literal::Float(3.14)))
+                }),
+                alternate: Some(Box::new(Expr::Block {
+                    body: vec![],
+                    terminator: Box::new(Expr::Literal(Literal::Integer(0)))
+                })),
+            })),
+        }
+    );
+}
+
+#[test]
+fn test_match_expr() {
+    let input = "match foo { 42 => 3.14 }";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::Match {
+            value: Box::new(Expr::Identifier("foo")),
+            arms: vec![crane::expr::MatchArm {
+                pattern: Expr::Literal(Literal::Integer(42)),
+                body: Expr::Literal(Literal::Float(3.14))
+            }]
+        }
     );
 }
