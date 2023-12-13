@@ -40,6 +40,14 @@ pub enum BinaryOp {
     And,
     Or,
     Xor,
+    ShiftRight,
+    ShiftLeft,
+    GreaterThanOrEqual,
+    LessThanOrEqual,
+    GreaterThan,
+    LessThan,
+    NotEqual,
+    Equal,
 }
 
 impl<'a> NodeParser<'a, BinaryOp> for BinaryOp {

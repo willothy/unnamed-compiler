@@ -1,11 +1,20 @@
 use std::{borrow::Cow, collections::BTreeMap};
 
 use chumsky::{
-    primitive::{choice, just, none_of},
+    primitive::{choice, just, none_of, todo},
+    recovery::{self, Strategy},
+    recursive::recursive,
+    select,
+    text::{ident, keyword, whitespace},
     IterParser, Parser,
 };
 
-use crate::{stmt::Stmt, ty::TypeSignature, NodeParser};
+use crate::{
+    stmt::{BinaryOp, Stmt, UnaryOp},
+    ty::TypeSignature,
+    util::comma_separated,
+    NodeParser,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum VariantValue<'a> {
@@ -158,6 +167,7 @@ impl<'a> NodeParser<'a, Self> for Literal<'a> {
             char,    //
             boolean, //,
         ))
+        .padded()
     }
 }
 
@@ -173,18 +183,20 @@ pub enum Expr<'a> {
     /// A literal value, e.g. `42` or `true`
     Literal(Literal<'a>),
     /// A binary expression, e.g. `1 + 2` or `foo && bar`
-    Binary(Box<Expr<'a>>, &'a str, Box<Expr<'a>>),
+    Binary(Box<Expr<'a>>, BinaryOp, Box<Expr<'a>>),
     /// A unary expression, e.g. `*foo` or `-42`
-    Unary(&'a str, Box<Expr<'a>>),
+    Unary(UnaryOp, Box<Expr<'a>>),
     /// An identifier, e.g. `foo`
     Identifier(&'a str),
     /// A call expression, e.g. `foo(42, 3.14)`
     Call(Box<Expr<'a>>, Vec<Expr<'a>>),
     /// An array index expression, e.g. `foo[42]`
     Index(Box<Expr<'a>>, Box<Expr<'a>>),
-    /// A field access, e.g. `foo.bar`
+    /// A struct field access, e.g. `foo.bar`
     /// This is used for both struct fields and enum variants.
-    Field(Box<Expr<'a>>, &'a str),
+    StructField(Box<Expr<'a>>, &'a str),
+    /// A tuple field access, e.g. `foo.0`
+    TupleField(Box<Expr<'a>>, usize),
     /// A block expression, e.g. `{ let x = 42; x }`
     ///
     /// The last expression in the block is used as the return value,
@@ -201,4 +213,168 @@ pub enum Expr<'a> {
         value: Box<Expr<'a>>,
         arms: Vec<MatchArm<'a>>,
     },
+}
+
+impl<'a> NodeParser<'a, Self> for Expr<'a> {
+    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+        recursive(|this| {
+            let literal = Literal::parser().map(Expr::Literal);
+
+            let r#if = keyword("if")
+                .ignore_then(this.clone())
+                .then(this.clone())
+                .then(keyword("else").ignore_then(this.clone()).or_not())
+                .map(|((cond, body), else_body)| {
+                    return Expr::If(Box::new(cond), Box::new(body), else_body.map(Box::new));
+                });
+
+            let r#loop = keyword("loop")
+                .ignore_then(this.clone())
+                .map(Box::new)
+                .map(Expr::Loop);
+
+            let r#break = keyword("break")
+                .then(this.clone().or_not())
+                .map(|(_, val)| Expr::Break(val.map(Box::new)));
+
+            let index = this
+                .clone()
+                .then(just("[").ignore_then(this.clone()))
+                .then_ignore(just("]"))
+                .map(|(lhs, rhs)| Expr::Index(Box::new(lhs), Box::new(rhs)));
+
+            let struct_field = this
+                .clone()
+                .then(just(".").ignore_then(ident()))
+                .map(|(lhs, rhs)| Expr::StructField(Box::new(lhs), rhs));
+
+            let tuple_field = this
+                .clone()
+                .then(just(".").ignore_then(chumsky::text::int(10)))
+                .map(|(lhs, rhs)| {
+                    let rhs = str::parse::<usize>(&rhs).unwrap();
+                    Expr::TupleField(Box::new(lhs), rhs)
+                });
+
+            let ident = ident().padded().map(Expr::Identifier);
+
+            let r#match = keyword("match")
+                .ignore_then(this.clone().padded())
+                .then(comma_separated(
+                    this.clone()
+                        .then_ignore(just("=>"))
+                        .then(this.clone())
+                        .map(|(pattern, body)| MatchArm { pattern, body }),
+                ))
+                .delimited_by(just("{"), just("}"))
+                .map(|(value, arms)| Expr::Match {
+                    value: Box::new(value),
+                    arms,
+                });
+
+            // let block = this
+            //     .clone()
+            //     .repeated()
+            //     .at_least(1)
+            //     .collect::<Vec<_>>()
+            //     .delimited_by(just("{"), just("}"))
+            //     .map(|mut x| {
+            //         let terminator = x.pop().expect("block to have a terminator");
+            //
+            //         Expr::Block(x, Box::new(terminator))
+            //     });
+
+            let atom = choice((
+                literal, //
+                r#loop,  //
+                r#if,    //
+                r#break, //
+                r#match,
+                ident, //
+                       // block,   //
+                       // struct_field,
+                       // index,
+                       // tuple_field,
+                       // call,
+                       // this.clone().padded().delimited_by(just("("), just(")")),
+            ))
+            .boxed();
+
+            let call = atom
+                .foldl(
+                    this.clone()
+                        .separated_by(just(','))
+                        .allow_trailing()
+                        .collect::<Vec<_>>()
+                        .delimited_by(just("("), just(")"))
+                        .repeated(),
+                    |lhs, args| {
+                        return Expr::Call(Box::new(lhs), args);
+                    },
+                )
+                .boxed();
+
+            let index_access = call.foldl(
+                this.clone().delimited_by(just("["), just("]")).repeated(),
+                |lhs, rhs| Expr::Index(Box::new(lhs), Box::new(rhs)),
+            );
+
+            let unary_op = just("-")
+                .map(|_| UnaryOp::Negation)
+                .or(just("!").map(|_| UnaryOp::Not))
+                .or(just("*").map(|_| UnaryOp::Dereference))
+                .or(just("&").map(|_| UnaryOp::Reference));
+
+            let unary = recursive(|unary| {
+                unary_op
+                    .then(unary)
+                    .map(|(op, expr)| Expr::Unary(op, Box::new(expr)))
+                    .or(index_access)
+            })
+            .boxed();
+
+            let bin_parsers = [
+                just("*")
+                    .map(|_| BinaryOp::Multiply)
+                    .or(just("/").map(|_| BinaryOp::Divide))
+                    .boxed(),
+                just("+")
+                    .map(|_| BinaryOp::Add)
+                    .or(just("/").map(|_| BinaryOp::Subtract))
+                    .boxed(),
+                just("%").map(|_| BinaryOp::Modulo).boxed(),
+                just("<<")
+                    .map(|_| BinaryOp::ShiftLeft)
+                    .or(just(">>").map(|_| BinaryOp::ShiftRight))
+                    .boxed(),
+                just("<")
+                    .map(|_| BinaryOp::LessThan)
+                    .or(just(">").map(|_| BinaryOp::GreaterThan))
+                    .or(just("<=").map(|_| BinaryOp::LessThanOrEqual))
+                    .or(just(">=").map(|_| BinaryOp::GreaterThanOrEqual))
+                    .boxed(),
+                just("==")
+                    .map(|_| BinaryOp::Equal)
+                    .or(just("!=").map(|_| BinaryOp::NotEqual))
+                    .boxed(),
+                just("&").map(|_| BinaryOp::And).boxed(),
+                just("^").map(|_| BinaryOp::Xor).boxed(),
+                just("|").map(|_| BinaryOp::Or).boxed(),
+                just("&&").map(|_| BinaryOp::LogicalAnd).boxed(),
+                just("||").map(|_| BinaryOp::LogicalOr).boxed(),
+            ];
+
+            let mut binary = unary.boxed();
+            for op in &bin_parsers {
+                binary = binary
+                    .clone()
+                    .foldl(op.clone().then(binary).repeated(), |lhs, (op, rhs)| {
+                        Expr::Binary(Box::new(lhs), op, Box::new(rhs))
+                    })
+                    .boxed();
+            }
+
+            binary
+        })
+    }
 }

@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use chumsky::{IterParser, Parser};
 use crane::{
-    expr::Literal,
+    expr::{Expr, Literal},
     stmt::{BinaryOp, UnaryOp},
     ty::{TypePath, TypePathSegment, TypeSignature},
     *,
@@ -233,5 +233,94 @@ fn unop_parser() {
             UnaryOp::Not,
             UnaryOp::BitwiseNot,
         ]
+    );
+}
+
+#[test]
+fn parse_expr() {
+    let input = "1 + 2 * 3";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::Binary(
+            Box::new(Expr::Literal(Literal::Integer(1))),
+            BinaryOp::Add,
+            Box::new(Expr::Binary(
+                Box::new(Expr::Literal(Literal::Integer(2))),
+                BinaryOp::Multiply,
+                Box::new(Expr::Literal(Literal::Integer(3)))
+            ))
+        )
+    );
+
+    let input = "1 + 2 * 3 + 4";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::Binary(
+            Box::new(Expr::Binary(
+                Box::new(Expr::Literal(Literal::Integer(1))),
+                BinaryOp::Add,
+                Box::new(Expr::Binary(
+                    Box::new(Expr::Literal(Literal::Integer(2))),
+                    BinaryOp::Multiply,
+                    Box::new(Expr::Literal(Literal::Integer(3)))
+                ))
+            )),
+            BinaryOp::Add,
+            Box::new(Expr::Literal(Literal::Integer(4)))
+        )
+    );
+}
+
+#[test]
+fn parse_call_expr() {
+    let input = "foo()";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::Call(Box::new(Expr::Identifier("foo")), vec![])
+    );
+
+    let input = "foo(42)";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::Call(
+            Box::new(Expr::Identifier("foo")),
+            vec![Expr::Literal(Literal::Integer(42))]
+        )
+    );
+
+    let input = "foo(42, 3.14)";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::Call(
+            Box::new(Expr::Identifier("foo")),
+            vec![
+                Expr::Literal(Literal::Integer(42)),
+                Expr::Literal(Literal::Float(3.14))
+            ]
+        )
+    );
+}
+
+#[test]
+fn test_index_expr() {
+    let input = "foo[42]";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::Index(
+            Box::new(Expr::Identifier("foo")),
+            Box::new(Expr::Literal(Literal::Integer(42)))
+        )
     );
 }
