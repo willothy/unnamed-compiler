@@ -100,51 +100,31 @@ fn comma_separated<'a, P: 'a + Parser<'a, &'a str, T>, T: 'a>(
 
 impl<'a> NodeParser<'a, TypeSignature<'a>> for TypeSignature<'a> {
     fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
-        fn unit<'b>() -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
-            just("()").map(|_| TypeSignature::Unit)
-        }
+        recursive(|this| {
+            let unit = just("()").map(|_| TypeSignature::Unit);
 
-        fn array<'b>(
-            p: impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b,
-        ) -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
-            just("[")
-                .ignore_then(p)
+            let array = just("[")
+                .ignore_then(this.clone())
                 .then_ignore(just("]"))
-                .map(|t| TypeSignature::Array(Box::new(t)))
-        }
+                .map(|t| TypeSignature::Array(Box::new(t)));
 
-        fn generic_application<'b>(
-            p: impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b,
-        ) -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
-            TypePath::parser()
-                .then(comma_separated(p).delimited_by(just("<"), just(">")))
-                .map(|(name, args)| TypeSignature::GenericApplication(name, args))
-        }
+            let generic_application = TypePath::parser()
+                .then(comma_separated(this.clone()).delimited_by(just("<"), just(">")))
+                .map(|(name, args)| TypeSignature::GenericApplication(name, args));
 
-        fn tuple<'b>(
-            p: impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b,
-        ) -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
-            comma_separated(p)
+            let tuple = comma_separated(this.clone())
                 .delimited_by(just("("), just(")"))
-                .map(|t| TypeSignature::Tuple(t))
-        }
+                .map(|t| TypeSignature::Tuple(t));
 
-        fn reference<'b>(
-            p: impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b,
-        ) -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
-            just("&")
+            let reference = just("&")
                 .ignore_then(whitespace().or_not())
-                .ignore_then(p)
-                .map(|t| TypeSignature::Reference(Box::new(t)))
-        }
+                .ignore_then(this.clone())
+                .map(|t| TypeSignature::Reference(Box::new(t)));
 
-        fn function<'b>(
-            p: impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b,
-        ) -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
-            just("fn")
+            let function = just("fn")
                 .ignore_then(
                     whitespace()
-                        .ignore_then(comma_separated(p.clone()))
+                        .ignore_then(comma_separated(this.clone()))
                         .then_ignore(whitespace())
                         .delimited_by(just("("), just(")")),
                 )
@@ -154,23 +134,19 @@ impl<'a> NodeParser<'a, TypeSignature<'a>> for TypeSignature<'a> {
                         .then(just("->"))
                         .then(whitespace().or_not()),
                 )
-                .then(p)
-                .map(|(input, output)| TypeSignature::Function(input, Box::new(output)))
-        }
+                .then(this.clone())
+                .map(|(input, output)| TypeSignature::Function(input, Box::new(output)));
 
-        fn named<'b>() -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
-            TypePath::parser().map(TypeSignature::Named)
-        }
+            let named = TypePath::parser().map(TypeSignature::Named);
 
-        recursive(|this| {
             choice((
-                unit(),
-                array(this.clone()),
-                generic_application(this.clone()),
-                tuple(this.clone()),
-                reference(this.clone()),
-                function(this.clone()),
-                named(),
+                unit,
+                array,
+                generic_application,
+                tuple,
+                reference,
+                function,
+                named,
             ))
         })
     }
