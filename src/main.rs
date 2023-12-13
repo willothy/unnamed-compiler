@@ -1,7 +1,8 @@
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use chumsky::{
-    primitive::{choice, just},
+    error::Rich,
+    primitive::{choice, just, none_of},
     recursive::recursive,
     text::{ident, whitespace},
     IterParser, Parser,
@@ -197,7 +198,7 @@ enum Literal<'a> {
     /// A float literal, e.g. `3.14` or `0.1e-10`
     Float(f64),
     /// A string literal, e.g. `"Hello, world!"`
-    String(&'a str),
+    String(Cow<'a, str>),
     /// A utf-8 character literal, e.g. `'a'`
     Char(char),
     /// A boolean literal, e.g. `true` or `false`
@@ -208,6 +209,209 @@ enum Literal<'a> {
     Struct(BTreeMap<&'a str, Expr<'a>>),
     /// An array initializer, e.g. `[1, 2, 3]`
     Array(Vec<Expr<'a>>),
+}
+
+impl<'a> NodeParser<'a, Self> for Literal<'a> {
+    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+        let unit = just("()").map(|_| Literal::Unit);
+
+        let integer = just("0x")
+            .to(16)
+            .then(chumsky::text::int(16))
+            .or(just("0b").to(2).then(chumsky::text::int(2)))
+            .or(just("0o").to(8).then(chumsky::text::int(8)))
+            .or(chumsky::text::int(10).map(|i| (10, i)))
+            .map(|(radix, int)| {
+                let num =
+                    i64::from_str_radix(int, radix).expect("to parse integer literal as integer");
+
+                Literal::Integer(num)
+            });
+
+        let scientific = just("e")
+            .or(just("E"))
+            .then(
+                // Special sign case because handling this as a unary expr would be a pain
+                just("-")
+                    .or_not()
+                    .map(|o| if o.is_some() { "-" } else { "" }),
+            )
+            .then(chumsky::text::int(10))
+            .map(|((e, negate), i)| format!("{}{}{}", e, negate, i));
+
+        let float = chumsky::text::int(10)
+            .then_ignore(just("."))
+            .then(chumsky::text::int(10))
+            .then(scientific.or_not())
+            .map(|((f, f2), sci)| {
+                let combined = if let Some(sci) = sci {
+                    format!("{}.{}{}", f, f2, sci)
+                } else {
+                    format!("{}.{}", f, f2)
+                };
+                let num = combined.parse::<f64>().expect("to parse float literal");
+                Literal::Float(num)
+            });
+
+        let escape = just('\\').ignore_then(choice((
+            just('/'),
+            just('"'),
+            just('\\'),
+            just('b').to('\x08'),
+            just('f').to('\x0C'),
+            just('n').to('\n'),
+            just('r').to('\r'),
+            just('t').to('\t'),
+            just("u{")
+                .ignore_then(
+                    chumsky::text::digits(16)
+                        .at_least(2)
+                        .at_most(6)
+                        .to_slice()
+                        .validate(|digits, _e, _emitter| {
+                            // TODO: report error
+                            char::from_u32(u32::from_str_radix(digits, 16).unwrap()).unwrap()
+                        }),
+                )
+                .then_ignore(just("}")),
+        )));
+
+        let string = none_of("\\\"")
+            .or(escape)
+            .repeated()
+            .collect::<Vec<char>>()
+            .delimited_by(just('"'), just('"'))
+            .map(|s| Literal::String(Cow::Owned(s.into_iter().collect::<String>())));
+
+        let char = none_of("\\'")
+            .or(escape)
+            .delimited_by(just('\''), just('\''))
+            .map(Literal::Char);
+
+        let boolean = just("true")
+            .map(|_| Literal::Boolean(true))
+            .or(just("false").map(|_| Literal::Boolean(false)));
+
+        // TODO: Expr parser
+
+        // let tuple = comma_separated(Expr::parser())
+        //     .delimited_by(just("("), just(")"))
+        //     .map(Literal::Tuple);
+
+        // let array = comma_separated(Expr::parser())
+        //     .delimited_by(just("["), just("]"))
+        //     .map(Literal::Array);
+        //
+        // let struct_field = ident()
+        //     .then_ignore(just(":"))
+        //     .then(Expr::parser())
+        //     .map(|(name, value)| (name, value));
+        //
+        // let struct_ = ident()
+        //     .then_ignore(just("{"))
+        //     .then(comma_separated(struct_field))
+        //     .then_ignore(just("}"))
+        //     .map(|(name, fields)| {
+        //         let mut map = BTreeMap::new();
+        //         for (name, value) in fields {
+        //             map.insert(name, value);
+        //         }
+        //         Literal::Struct(map)
+        //     });
+
+        choice((
+            unit,    //
+            float,   //
+            integer, //
+            string,  //
+            char,    //
+            boolean, //,
+        ))
+    }
+}
+
+#[test]
+fn parse_float_literal() {
+    let input = "3.14";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output().unwrap(), &Literal::Float(3.14));
+
+    let input = "3.14e10";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output().unwrap(), &Literal::Float(3.14e10));
+
+    let input = "3.14e-10";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output().unwrap(), &Literal::Float(3.14e-10));
+}
+
+#[test]
+fn parse_int_literal() {
+    let input = "42";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output().unwrap(), &Literal::Integer(42));
+
+    let input = "0x2A";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output().unwrap(), &Literal::Integer(42));
+
+    let input = "0b101010";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output().unwrap(), &Literal::Integer(42));
+
+    let input = "0o52";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output().unwrap(), &Literal::Integer(42));
+}
+
+#[test]
+fn parse_string_literal() {
+    let input = "\"Hello, world!\"";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Literal::String(Cow::Borrowed("Hello, world!"))
+    );
+
+    let input = "\"Hello, \\\"world!\\\"\"";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Literal::String(Cow::Borrowed("Hello, \"world!\""))
+    );
+
+    let input = "\"Hello, \\u{1F600}!\"";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Literal::String(Cow::Borrowed("Hello, 😀!"))
+    );
+}
+
+#[test]
+fn parse_char_literal() {
+    let input = "'a'";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output().unwrap(), &Literal::Char('a'));
+    let input = "'\\n'";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output().unwrap(), &Literal::Char('\n'));
+    let input = "'\\u{1F600}'";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output().unwrap(), &Literal::Char('😀'));
 }
 
 #[derive(Debug, PartialEq)]
@@ -335,6 +539,12 @@ fn unop_parser() {
     );
 }
 
+#[derive(Debug, PartialEq)]
+pub struct MatchArm<'a> {
+    pattern: Expr<'a>,
+    body: Expr<'a>,
+}
+
 /// Represents an expression at parse level.
 #[derive(Debug, PartialEq)]
 enum Expr<'a> {
@@ -365,6 +575,10 @@ enum Expr<'a> {
     /// Used to break out of a loop, e.g. `break;` or `break 42;`
     /// The value is optional, and is only used if the loop is used as an expression.
     Break(Option<Box<Expr<'a>>>),
+    Match {
+        value: Box<Expr<'a>>,
+        arms: Vec<MatchArm<'a>>,
+    },
 }
 
 #[derive(Debug, PartialEq)]
