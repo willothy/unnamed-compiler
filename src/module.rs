@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     expr::{Expr, VariantValue},
-    ty::TypePath,
-    TypeSignature,
+    ty::{TypePath, TypeSignature},
 };
 
 #[derive(Debug, PartialEq)]

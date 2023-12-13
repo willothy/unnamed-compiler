@@ -3,7 +3,7 @@ use chumsky::{
     Parser,
 };
 
-use crate::{expr::Expr, NodeParser, TypeSignature};
+use crate::{expr::Expr, ty::TypeSignature, NodeParser};
 
 #[derive(Debug, PartialEq)]
 pub enum Stmt<'a> {

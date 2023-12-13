@@ -4,7 +4,7 @@ use chumsky::{IterParser, Parser};
 use crane::{
     expr::Literal,
     stmt::{BinaryOp, UnaryOp},
-    ty::{TypePath, TypePathSegment},
+    ty::{TypePath, TypePathSegment, TypeSignature},
     *,
 };
 

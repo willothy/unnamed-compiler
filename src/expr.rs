@@ -5,7 +5,7 @@ use chumsky::{
     IterParser, Parser,
 };
 
-use crate::{stmt::Stmt, NodeParser, TypeSignature};
+use crate::{stmt::Stmt, ty::TypeSignature, NodeParser};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum VariantValue<'a> {
