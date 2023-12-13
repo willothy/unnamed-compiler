@@ -1,358 +1,518 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
-/// A full package with submodules.
-pub struct Module {
-    pub name: String,
-    pub submodules: Vec<Module>,
-    pub declarations: HashMap<String, Declaration>,
+use chumsky::{
+    primitive::{choice, just},
+    recursive::recursive,
+    text::{ident, whitespace},
+    IterParser, Parser,
+};
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum TypePathSegment<'a> {
+    Package,
+    SelfModule,
+    SuperModule,
+    Ident(&'a str),
 }
 
-/// A module-level declaration.
-pub enum Declaration {
+/// Represents a type path, e.g. `package::path::to::type`.
+/// This is used to represent the path to the type in the dependency graph.
+///
+/// The paths at parse level are not guaranteed to be valid path, and may contain
+/// intermediate nodes that are not valid identifiers, such as `package`, `self` or `super`.
+/// These will be parsed as [`TypePathSegment::Package`], [`TypePathSegment::SelfModule`] and
+/// [`TypePathSegment::SuperModule`] respectively, and must be resolved to a valid path
+/// if valid or reported as an error during import resolution.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TypePath<'a> {
+    /// The actual type name.
+    name: &'a str,
+    /// The path to the type, if any, starting with the package name
+    /// or `package`, `self` or `super`.
+    path: Option<Vec<TypePathSegment<'a>>>,
+}
+
+/// Defines the interface used to construct a parser for a node type.
+///
+/// Always outputs a `T` / `Self` and takes a `Self::Input` as input.
+pub trait NodeParser<'a, T>
+where
+    Self: 'a,
+{
+    fn parser() -> impl Parser<'a, &'a str, T> + Clone + 'a;
+}
+
+impl<'a> NodeParser<'a, TypePathSegment<'a>> for TypePathSegment<'a> {
+    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+        ident().map(|s| match s {
+            "package" => Self::Package,
+            "self" => Self::SelfModule,
+            "super" => Self::SuperModule,
+            name => Self::Ident(name),
+        })
+    }
+}
+
+impl<'a> NodeParser<'a, TypePath<'a>> for TypePath<'a> {
+    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+        TypePathSegment::parser()
+            .separated_by(just("::"))
+            .at_least(2)
+            .collect::<Vec<_>>()
+            .map(|mut path| {
+                let name = path.pop().unwrap();
+                let TypePathSegment::Ident(name) = name else {
+                    unreachable!()
+                };
+
+                TypePath {
+                    name,
+                    path: Some(path),
+                }
+            })
+            .or(ident().map(|name| TypePath { name, path: None }))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TypeSignature<'a> {
+    Unit,
+    // Struct, enum or union types without generic parameters
+    // Also primitive types - maybe this should be a separate variant?
+    Named(TypePath<'a>),
+    // Struct, enum or union types with generic parameters
+    GenericApplication(TypePath<'a>, Vec<TypeSignature<'a>>),
+    Tuple(Vec<TypeSignature<'a>>),
+    Array(Box<TypeSignature<'a>>),
+    Function(Vec<TypeSignature<'a>>, Box<TypeSignature<'a>>),
+    Reference(Box<TypeSignature<'a>>),
+}
+
+fn comma_separated<'a, P: 'a + Parser<'a, &'a str, T>, T: 'a>(
+    parser: P,
+) -> impl Parser<'a, &'a str, Vec<T>> + Clone {
+    parser
+        .separated_by(just(",").then_ignore(whitespace()))
+        .collect::<Vec<_>>()
+        .boxed()
+}
+
+impl<'a> NodeParser<'a, TypeSignature<'a>> for TypeSignature<'a> {
+    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+        fn unit<'b>() -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
+            just("()").map(|_| TypeSignature::Unit)
+        }
+
+        fn array<'b>(
+            p: impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b,
+        ) -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
+            just("[")
+                .ignore_then(p)
+                .then_ignore(just("]"))
+                .map(|t| TypeSignature::Array(Box::new(t)))
+        }
+
+        fn generic_application<'b>(
+            p: impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b,
+        ) -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
+            TypePath::parser()
+                .then(comma_separated(p).delimited_by(just("<"), just(">")))
+                .map(|(name, args)| TypeSignature::GenericApplication(name, args))
+        }
+
+        fn tuple<'b>(
+            p: impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b,
+        ) -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
+            comma_separated(p)
+                .delimited_by(just("("), just(")"))
+                .map(|t| TypeSignature::Tuple(t))
+        }
+
+        fn reference<'b>(
+            p: impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b,
+        ) -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
+            just("&")
+                .ignore_then(whitespace().or_not())
+                .ignore_then(p)
+                .map(|t| TypeSignature::Reference(Box::new(t)))
+        }
+
+        fn function<'b>(
+            p: impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b,
+        ) -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
+            just("fn")
+                .ignore_then(
+                    whitespace()
+                        .ignore_then(comma_separated(p.clone()))
+                        .then_ignore(whitespace())
+                        .delimited_by(just("("), just(")")),
+                )
+                .then_ignore(
+                    whitespace()
+                        .or_not()
+                        .then(just("->"))
+                        .then(whitespace().or_not()),
+                )
+                .then(p)
+                .map(|(input, output)| TypeSignature::Function(input, Box::new(output)))
+        }
+
+        fn named<'b>() -> impl Parser<'b, &'b str, TypeSignature<'b>> + Clone + 'b {
+            TypePath::parser().map(TypeSignature::Named)
+        }
+
+        recursive(|this| {
+            choice((
+                unit(),
+                array(this.clone()),
+                generic_application(this.clone()),
+                tuple(this.clone()),
+                reference(this.clone()),
+                function(this.clone()),
+                named(),
+            ))
+        })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum VariantValue<'a> {
+    /// A unit variant with no attached data, e.g. `UnitVariant`
+    Unit,
+    /// A tuple-style variant, e.g. `TupleVariant(int, int)`
+    Tuple(Vec<TypeSignature<'a>>),
+    /// A struct-style variant, e.g. `StructVariant { field: int }`
+    Struct(BTreeMap<&'a str, TypeSignature<'a>>),
+    /// A variant with a single value, e.g. `CStyleVariant = 42`
+    Integer(i64),
+}
+
+/// Represents a literal value at parse level.
+#[derive(Debug, PartialEq)]
+enum Literal<'a> {
+    /// A unit literal, e.g. `()`
+    Unit,
+    /// An integer literal, e.g. `42` or `0x2A`
+    Integer(i64),
+    /// A float literal, e.g. `3.14` or `0.1e-10`
+    Float(f64),
+    /// A string literal, e.g. `"Hello, world!"`
+    String(&'a str),
+    /// A utf-8 character literal, e.g. `'a'`
+    Char(char),
+    /// A boolean literal, e.g. `true` or `false`
+    Boolean(bool),
+    /// A tuple literal, e.g. `(1, 2, 3)`
+    Tuple(Vec<Expr<'a>>),
+    /// A struct literal / initializer, e.g. `Struct { field: 42 }`
+    Struct(BTreeMap<&'a str, Expr<'a>>),
+    /// An array initializer, e.g. `[1, 2, 3]`
+    Array(Vec<Expr<'a>>),
+}
+
+#[derive(Debug, PartialEq)]
+enum Stmt<'a> {
+    /// A let binding, e.g. `let x: int = 42;`
+    Let(&'a str, Option<TypeSignature<'a>>, Option<Expr<'a>>),
+    /// An assignment, e.g. `x = 42;` or `let Point { x, y } = point;`
+    Assignment(Expr<'a>, Expr<'a>),
+    /// A return statement
+    Return(Expr<'a>),
+    /// An expression statement.
+    Expression(Expr<'a>),
+    /// While loops cannot be used as expressions because their resulting value cannot be
+    /// statically guaranteed.
+    While { condition: Expr<'a>, body: Expr<'a> },
+    /// For loops follow the same rules as while loops
+    For {
+        pattern: Expr<'a>,
+        iter: Expr<'a>,
+        body: Expr<'a>,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum BinaryOp {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Modulo,
+
+    LogicalAnd,
+    LogicalOr,
+
+    And,
+    Or,
+    Xor,
+}
+
+impl<'a> NodeParser<'a, BinaryOp> for BinaryOp {
+    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+        choice((
+            just("+").map(|_| Self::Add),
+            just("-").map(|_| Self::Subtract),
+            just("*").map(|_| Self::Multiply),
+            just("/").map(|_| Self::Divide),
+            just("%").map(|_| Self::Modulo),
+            just("&&").map(|_| Self::LogicalAnd),
+            just("||").map(|_| Self::LogicalOr),
+            just("&").map(|_| Self::And),
+            just("|").map(|_| Self::Or),
+            just("^").map(|_| Self::Xor),
+        ))
+    }
+}
+
+#[test]
+fn binop_parser() {
+    let input = "+-*/%&&||&|^";
+    let result = BinaryOp::parser()
+        .repeated()
+        .collect::<Vec<_>>()
+        .parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &[
+            BinaryOp::Add,
+            BinaryOp::Subtract,
+            BinaryOp::Multiply,
+            BinaryOp::Divide,
+            BinaryOp::Modulo,
+            BinaryOp::LogicalAnd,
+            BinaryOp::LogicalOr,
+            BinaryOp::And,
+            BinaryOp::Or,
+            BinaryOp::Xor,
+        ]
+    );
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum UnaryOp {
+    /// Dereference, e.g. `*foo`
+    Dereference,
+    /// Reference, e.g. `&foo`
+    Reference,
+    /// Negation, e.g. `-42`
+    Negation,
+    /// Logical not, e.g. `!foo`
+    Not,
+    /// Two's complement, e.g. `~foo
+    BitwiseNot,
+}
+
+impl<'a> NodeParser<'a, UnaryOp> for UnaryOp {
+    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+        choice((
+            just("*").to(Self::Dereference),
+            just("&").to(Self::Reference),
+            just("-").to(Self::Negation),
+            just("!").to(Self::Not),
+            just("~").to(Self::BitwiseNot),
+        ))
+    }
+}
+
+#[test]
+fn unop_parser() {
+    let input = "*&-!~";
+    let result = UnaryOp::parser()
+        .repeated()
+        .collect::<Vec<_>>()
+        .parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &[
+            UnaryOp::Dereference,
+            UnaryOp::Reference,
+            UnaryOp::Negation,
+            UnaryOp::Not,
+            UnaryOp::BitwiseNot,
+        ]
+    );
+}
+
+/// Represents an expression at parse level.
+#[derive(Debug, PartialEq)]
+enum Expr<'a> {
+    /// A literal value, e.g. `42` or `true`
+    Literal(Literal<'a>),
+    /// A binary expression, e.g. `1 + 2` or `foo && bar`
+    Binary(Box<Expr<'a>>, &'a str, Box<Expr<'a>>),
+    /// A unary expression, e.g. `*foo` or `-42`
+    Unary(&'a str, Box<Expr<'a>>),
+    /// An identifier, e.g. `foo`
+    Identifier(&'a str),
+    /// A call expression, e.g. `foo(42, 3.14)`
+    Call(Box<Expr<'a>>, Vec<Expr<'a>>),
+    /// An array index expression, e.g. `foo[42]`
+    Index(Box<Expr<'a>>, Box<Expr<'a>>),
+    /// A field access, e.g. `foo.bar`
+    /// This is used for both struct fields and enum variants.
+    Field(Box<Expr<'a>>, &'a str),
+    /// A block expression, e.g. `{ let x = 42; x }`
+    ///
+    /// The last expression in the block is used as the return value,
+    /// but early returns are allowed with the `return` statement.
+    Block(Vec<Stmt<'a>>, Box<Expr<'a>>),
+    If(Box<Expr<'a>>, Box<Expr<'a>>, Option<Box<Expr<'a>>>),
+    /// Rust-style loops work as expressions, but *must* yield a value
+    /// if used as such.
+    Loop(Box<Expr<'a>>),
+    /// Used to break out of a loop, e.g. `break;` or `break 42;`
+    /// The value is optional, and is only used if the loop is used as an expression.
+    Break(Option<Box<Expr<'a>>>),
+}
+
+#[derive(Debug, PartialEq)]
+enum Declaration<'a> {
     Function {
-        parameters: Vec<(String, TypeName)>,
-        return_ty: TypeName,
-        body: Expression,
+        name: &'a str,
+        ty: TypeSignature<'a>,
+        body: Expr<'a>,
+    },
+    Struct {
+        name: &'a str,
+        fields: BTreeMap<&'a str, TypeSignature<'a>>,
+    },
+    Enum {
+        name: &'a str,
+        variants: Vec<(&'a str, VariantValue<'a>)>,
+    },
+    Union {
+        name: &'a str,
+        variants: BTreeMap<&'a str, TypeSignature<'a>>,
+    },
+    Static {
+        name: &'a str,
+        ty: TypeSignature<'a>,
+        value: Expr<'a>,
     },
     Constant {
-        ty: TypeName,
-        value: Expression,
+        name: &'a str,
+        ty: TypeSignature<'a>,
+        value: Expr<'a>,
     },
-    Struct {
-        fields: Vec<(String, TypeName)>,
-    },
+    /// A type alias, e.g. `type Foo<T> = Vec<T>;`
     TypeAlias {
-        ty: TypeName,
-    },
-}
-
-/// A type annotation at the AST level. Represents the parsed form of a type in argument, return
-/// type or variable type annotation position, before it is resolved. For example,
-/// `List<T>` would be represented as a `TypeAnnotation::Constructor` with `base` set to
-/// `TypeAnnotation::Concrete(TypeName { name: "List", path: ... })` and
-/// `parameters` set to `[TypeAnnotation::Variable("T")]`.
-pub enum TypeAnnotation {
-    Unit,
-    /// A concrete named type, such as `bool` or `std::Vec`.
-    Concrete(TypeName),
-    /// A tuple type, such as `(T, U)`.
-    Tuple(Vec<TypeAnnotation>),
-    /// An array type, such as `[T]`.
-    Array(Box<TypeAnnotation>),
-    /// A reference to a value, such as `&T`.
-    Reference(Box<TypeAnnotation>),
-    /// A type variable, such as `T`.
-    Variable(String),
-    /// A generic type constructor, such as `std::Vec<T>`.
-    Constructor {
-        /// The base type path, such as `std::Vec` in `std::Vec<T>`.
-        ty: TypeName,
-        /// The type parameters to the constructor, such as `T` in `std::Vec<T>`.
-        parameters: Vec<TypeAnnotation>,
-    },
-    /// A function type, such as `fn() -> bool`.
-    Function {
-        parameters: Vec<TypeAnnotation>,
-        return_ty: Box<TypeAnnotation>,
-    },
-}
-
-/// Represents the full path to a type, including the name of the type itself.
-pub struct TypeName {
-    pub name: String,
-    pub path: TypePath,
-}
-
-/// Represents the path to a type, not including the name of the type itself.
-pub enum TypePath {
-    /// Absolute paths are relative to the root module of the current package, and start with `::`.
-    Absolute(Vec<String>),
-    /// Relative paths are relative to the current module, and start with `self::`.
-    Relative(Vec<String>),
-    /// External paths are relative to the root module of an external package/module.
-    ///
-    /// NOTE: All external paths are resolved from unqualified paths before AST lowering. Thus,
-    /// there is not way to specify an external path in a text format.
-    External(Vec<String>),
-    /// Unqualified paths are relative to the current module or the module specified by the root of
-    /// the path. The first element is the name of the package, and the rest are the
-    /// path relative to the root module of that package. If the name exists in the current module,
-    /// it is preferred over an external package to avoid name conflicts.
-    ///
-    /// NOTE: Unqualified paths need to be resolved to either an absolute, relative, or external paths before
-    /// AST lowering.
-    Unqualified(Vec<String>),
-}
-
-/// A primitive literal value.
-pub enum Literal {
-    /// A unit literal, denoted by `()`.
-    Unit,
-    /// An n-bit integer literal, such as `1` or `0b1010`. The default type is `i32`.
-    ///
-    /// Prefixes:
-    /// - Decimal: `1`
-    /// - Binary: `0b1010`
-    /// - Octal: `0o755`
-    /// - Hexadecimal: `0xff`
-    /// - Byte: `b'A'`
-    ///
-    /// Suffices:
-    ///   num  | signedness | size
-    ///   1    | [u,i]      | [8,16,32,64,128,size]
-    ///
-    /// Examples:
-    /// - `1usize` is an unsigned, pointer-sized integer with value `1`.
-    /// - `0b1010` is the default integer type, with value `10`.
-    /// - `0xffu8` is an 8-bit unsigned integer with value `255`.
-    Int(i64),
-    /// A floating-point literal, such as `1.0`, `2.5f32` or `1.0e10`. The default type is `f64`.
-    ///
-    /// Suffices:
-    ///  num  | magnitude | size
-    ///  1.1  | e[n]      | f[32,64]
-    Float(f32),
-    /// A string literal, such as `"foo"`.
-    Str(String),
-    /// A character literal, such as `'a'`.
-    Char(char),
-    /// A boolean literal, either `true` or `false`.
-    Bool(bool),
-}
-
-/// A statement in a block.
-pub enum Statement {
-    /// A variable binding, such as `let foo = 1`.
-    VariableBinding {
-        pattern: LhsExpression,
-        value: Expression,
-    },
-    /// A destructuring assignment, such as `let (x, y) = foo`.
-    DestructuringAssignment {
-        pattern: LhsExpression,
-        value: Expression,
-    },
-    /// An expression statement, such as `foo(1, 2)`.
-    Expression(Expression),
-    /// A return statement, such as `return 1`.
-    Return(Expression),
-    /// A break statement, such as `break` or `break 5`.
-    Break {
-        /// Optional label to break out of. For example, in `foo: loop { break foo }`, `foo` is the label. If not
-        /// specified, breaks out of the innermost loop.
-        block: Option<String>,
-        /// Optional value to return from the loop. For example, in `loop { break 5 }`, `5` is the value. If not
-        /// specified, results in `()` if captured by a variable.
+        name: &'a str,
+        /// The generic parameters of the type alias, if any.
         ///
-        /// NOTE: Not allowed in `for` or `while` loops as their output cannot be guaranteed at
-        /// compile time.
-        value: Option<Expression>,
+        /// The `T` in `type Foo<T> = Vec<T>;` is a generic parameter.
+        generic_params: Vec<&'a str>,
+        /// The type the alias points to. Unresolved at this stage.
+        ty: TypeSignature<'a>,
     },
-    /// A continue statement in a loop.
-    Continue,
-    /// A while loop, such as `while foo { bar }`.
-    While {
-        label: Option<String>,
-        condition: Expression,
-        body: Expression,
-    },
-    /// A for loop, such as `for x in foo { bar }`.
-    For {
-        label: Option<String>,
-        pattern: LhsExpression,
-        iterator: Expression,
-        body: Expression,
-    },
-}
-
-/// A unary operator.
-pub enum UnaryOperator {
-    /// Represents the - in a negation expression, such as `-foo`.
-    Negate, // -
-    /// Represents the ! in a boolean not expression, such as `!foo`.
-    LogicalNot, // !
-    /// Represents the ~ in a bitwise not expression, such as `~foo`.
-    BitwiseNot, // ~
-    /// Represents the * in a dereference expression, such as `*foo`.
-    Deref, // *
-    /// Represents the & in a reference to a value, such as `&foo`.
-    Ref, // &
-}
-
-/// A binary operator.
-pub enum BinaryOperator {
-    // Arithmetic
-    Add, // +
-    Sub, // -
-    Mul, // *
-    Div, // /
-    Mod, // %
-    Pow, // **
-
-    // Comparison
-    Equal,          // ==
-    NotEqual,       // !=
-    GreaterThan,    // >
-    GreaterOrEqual, // >=
-    LessThan,       // <
-    LessOrEqual,    // <=
-
-    // Logical (short-circuiting)
-    LogicalOr,  // ||
-    LogicalAnd, // &&
-
-    // Bitwise
-    BitwiseOr,  // |
-    BitwiseAnd, // &
-    Xor,        // ^
-}
-
-/// An expression which results in a value.
-pub enum Expression {
-    /// A primitive literal, such as `1`, `"foo"`, or `()`.
-    Literal { value: Literal },
-    /// Represents the use of a variable, such as `foo`.
-    Variable { name: String },
-    Unary {
-        op: UnaryOperator,
-        operand: Box<Expression>,
-    },
-    Binary {
-        op: BinaryOperator,
-        left: Box<Expression>,
-        right: Box<Expression>,
-    },
-    /// A call expression, such as `foo(1, 2)`.
-    Call {
-        function: Box<Expression>,
-        arguments: Vec<Expression>,
-    },
-    /// A struct init (or struct literal), such as `Point { x: 1, y: 2 }`.
-    StructInit {
-        ty: TypeName,
-        fields: Vec<(String, Expression)>,
-    },
-    /// An array init (or array literal), such as `[1, 2]`.
-    ArrayInit {
-        ty: TypeName,
-        elements: Vec<Expression>,
-    },
-    /// A tuple init (or tuple literal), such as `(1, 2)`.
-    TupleInit { fields: Vec<Expression> },
-    /// A struct field access expression. For example, in `foo.bar`, `foo` (the
-    /// `struct_expr`) is an `Expression::Variable`, and `bar` is the `field` in `Expression::FieldAccess`.
-    StructAccess {
-        struct_expr: Box<Expression>,
-        field: String,
-    },
-    IndexAccess {
-        array_expr: Box<Expression>,
-        index_expr: Box<Expression>,
-    },
-    /// A tuple field access expression. For example, in `foo.0`, `foo` (the `tuple_expr`) is
-    /// an `Expression::Variable`, and `0` is the `index` in `Expression::TupleFieldAccess`.
-    TupleAccess {
-        tuple_expr: Box<Expression>,
-        index: usize,
-    },
-    /// A block expression, such as `{ foo; bar }`.
-    Block {
-        statements: Vec<Statement>,
-        /// The value of the block is the value of the last statement in the block.
-        value: Box<Expression>,
-    },
-    /// A match expression, such as `match foo { 1 => 2, _ => 3 }`.
-    Match {
-        value: Box<Expression>,
-        arms: Vec<MatchArm>,
-    },
-    /// An if expression, such as `if foo { 1 } else { 2 }`.
-    If {
-        condition: Box<Expression>,
-        then: Box<Expression>,
-        // Required for if-else expressions, optional in expression statements.
-        otherwise: Option<Box<Expression>>,
-    },
-    /// A loop expression, such as `loop { break foo; }`.
-    Loop { body: Box<Expression> },
-}
-
-/// An arm in a match expression. For example, in `match foo { 1 => 2, _ => 3 }`, `1 => 2` is a
-/// `MatchArm`.
-pub struct MatchArm {
-    pub pattern: LhsExpression,
-    pub body: Expression,
-}
-
-/// A type expression in pattern matching, or a left-hand side expression in a destructuring assignment.
-pub enum LhsExpression {
-    /// A unit literal in a pattern. For example, in
-    /// `() = foo`, `()` is a `LhsExpression::Unit`.
+    /// A top-level import, e.g. `use package::path::to::type;`
     ///
-    /// NOTE: Not allowed in destructuring assignments.
-    Unit,
-    /// A wildcard in a destructuring assignment. For example, in `let (_, y) = foo`,
-    /// `_` is a `LhsExpression::Wildcard`.
-    Wildcard,
-    /// A variable binding in pattern matching or assignment. For example, in
-    /// `foo = 1`, `foo` is a `LhsExpression::Variable`. Also applies to destructuring, where the
-    /// variable is bound to the value being destructured. For example, in
-    /// `let (x, y) = foo`, `x` and `y` are both `LhsExpression::Variable`s.
-    Variable(String),
-    /// A field access on the left-hand side of an assignment. For example, in
-    /// `foo.bar = 1`, `foo.bar` is a `LhsExpression::FieldAccess`.
-    ///
-    /// NOTE: Not allowed to be nested inside a struct or tuple destructuring, or in pattern matching.
-    StructAccess {
-        struct_expr: Expression,
-        field: String,
-    },
-    /// A tuple field access on the left-hand side of an assignment. For example, in
-    /// `foo.0 = 1`, `foo.0` is a `LhsExpression::TupleAccess`.
-    TupleAccess {
-        tuple_expr: Expression,
-        index: usize,
-    },
-    /// An index access on the left-hand side of an assignment. For example, in
-    /// `foo[0] = 1`, `foo[0]` is a `LhsExpression::IndexAccess`.
-    /// NOTE: Not allowed to be nested inside a struct or tuple destructuring, or in pattern matching.
-    IndexAccess {
-        array_expr: Expression,
-        index_expr: Expression,
-    },
-    /// A call expression on the left-hand side of an assignment. For example, in
-    /// `*foo(1) = 1`, `foo(1)` is a `LhsExpression::Call` containing a `LhsExpression::Variable`.
-    /// NOTE: Not allowed to be nested inside a struct or tuple destructuring, or in pattern matching.
-    /// Must be nested inside a `LhsExpression::Deref`, `LhsExpression::FieldAccess` or similar.
-    Call {
-        function: Expression,
-        arguments: Vec<Expression>,
-    },
-    /// A dereference on the left-hand side of an assignment. For example, in
-    /// `*foo = 1`, `*foo` is a `LhsExpression::Deref` containing a `LhsExpression::Variable`.
-    ///
-    /// NOTE: Not allowed to be nested inside a struct or tuple destructuring, or in pattern matching.
-    Deref { inner: Expression },
-    /// A struct destructuring on the left-hand side of an assignment. For example, in
-    /// `let Point { x, y } = foo`, `Point { x, y }` is a `LhsExpression::Struct` containing two
-    /// `LhsExpression::Variable`s.
-    Struct {
-        ty: TypeName,
-        /// Destructuring can be nested (e.g. `Rect { origin: Point { x, y }, size }`), where
-        /// origin is destructured into `x` and `y`, and size is bound directly to `size`.
-        fields: Vec<LhsExpression>,
-    },
-    /// A tuple destructuring on the left-hand side of an assignment, such as
-    /// `let (x, y) = foo`.
-    Tuple(Vec<LhsExpression>),
-    /// An enum variant destructuring on the left-hand side of an assignment. For
-    /// example, in `let Some(x) = foo`, `Some(x)` is a `LhsExpression::EnumVariant` containing a
-    /// `LhsExpression::Variable`.
-    EnumVariant {
-        ty: TypeName,
-        variant: String,
-        fields: Vec<LhsExpression>,
-    },
+    /// Not sure if this should be in [`Declaration`] or not...
+    Use { path: TypePath<'a> },
 }
 
-fn main() {}
+#[test]
+fn parse_type_signature() {
+    let input = "fn(self::Test, (&int, [int])) -> &package::Vec<(T, U)>";
+    let result = TypeSignature::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &TypeSignature::Function(
+            vec![
+                TypeSignature::Named(TypePath {
+                    name: "Test",
+                    path: Some(vec![TypePathSegment::SelfModule])
+                }),
+                TypeSignature::Tuple(vec![
+                    TypeSignature::Reference(Box::new(TypeSignature::Named(TypePath {
+                        name: "int",
+                        path: None
+                    }))),
+                    TypeSignature::Array(Box::new(TypeSignature::Named(TypePath {
+                        name: "int",
+                        path: None
+                    }))),
+                ])
+            ],
+            Box::new(TypeSignature::Reference(Box::new(
+                TypeSignature::GenericApplication(
+                    TypePath {
+                        name: "Vec",
+                        path: Some(vec![TypePathSegment::Package])
+                    },
+                    vec![TypeSignature::Tuple(vec![
+                        TypeSignature::Named(TypePath {
+                            name: "T",
+                            path: None
+                        }),
+                        TypeSignature::Named(TypePath {
+                            name: "U",
+                            path: None
+                        })
+                    ])]
+                )
+            )))
+        ),
+        "{:#?}",
+        result
+    );
+}
+
+#[test]
+fn parse_type_path() {
+    let input = "package::path::to::type";
+    let result = TypePath::parser().parse(input);
+    println!("{:#?}", result);
+    assert_eq!(
+        result.output().expect("to output a typepath"),
+        &TypePath {
+            name: "type",
+            path: Some(vec![
+                TypePathSegment::Package,
+                TypePathSegment::Ident("path"),
+                TypePathSegment::Ident("to")
+            ])
+        }
+    );
+
+    let input = "type";
+    let result = TypePath::parser().parse(input);
+    println!("{:#?}", result);
+    assert_eq!(
+        result.output().expect("to output a typepath"),
+        &TypePath {
+            name: "type",
+            path: None
+        }
+    );
+
+    let input = "package::type";
+    let result = TypePath::parser().parse(input);
+    println!("{:#?}", result);
+    assert_eq!(
+        result.output().expect("to output a typepath"),
+        &TypePath {
+            name: "type",
+            path: Some(vec![TypePathSegment::Package])
+        }
+    );
+
+    let input = "self::type";
+    let result = TypePath::parser().parse(input);
+    println!("{:#?}", result);
+    assert_eq!(
+        result.output().expect("to output a typepath"),
+        &TypePath {
+            name: "type",
+            path: Some(vec![TypePathSegment::SelfModule])
+        }
+    );
+}
+
+fn main() {
+    let input = "package::path::to::type";
+    let result = TypePath::parser().parse(input);
+    println!("{:#?}", result);
+}
