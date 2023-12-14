@@ -1,4 +1,4 @@
-use chumsky::Parser;
+use chumsky::{error::Rich, extra, Parser};
 
 pub mod expr;
 pub mod module;
@@ -13,5 +13,5 @@ pub trait NodeParser<'a, T>
 where
     Self: 'a,
 {
-    fn parser() -> impl Parser<'a, &'a str, T> + Clone + 'a;
+    fn parser() -> impl Parser<'a, &'a str, T, extra::Err<Rich<'a, char>>> + Clone + 'a;
 }

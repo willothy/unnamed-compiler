@@ -1,9 +1,12 @@
 use std::{borrow::Cow, collections::BTreeMap};
 
 use chumsky::{
-    primitive::{choice, just, none_of, one_of},
+    error::Rich,
+    extra,
+    pratt::postfix,
+    primitive::{choice, end, just, none_of, one_of, todo},
     recursive::recursive,
-    text::{ident, keyword},
+    text::{ident, keyword, whitespace},
     IterParser, Parser,
 };
 
@@ -50,7 +53,7 @@ pub enum Literal<'a> {
 }
 
 impl<'a> NodeParser<'a, Self> for Literal<'a> {
-    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
         let unit = just("()").map(|_| Literal::Unit);
 
         let integer = just("0x")
@@ -174,7 +177,7 @@ pub enum Expr<'a> {
     /// but early returns are allowed with the `return` statement.
     Block {
         body: Vec<Stmt<'a>>,
-        terminator: Box<Expr<'a>>,
+        terminator: Option<Box<Expr<'a>>>,
     },
     If {
         cond: Box<Expr<'a>>,
@@ -191,11 +194,20 @@ pub enum Expr<'a> {
         value: Box<Expr<'a>>,
         arms: Vec<MatchArm<'a>>,
     },
+    /// A let binding, e.g. `let x: int = 42;` or `let Point { x, y } = point;`
+    Let {
+        pattern: Box<Expr<'a>>,
+        ty: Option<TypeSignature<'a>>,
+        value: Option<Box<Expr<'a>>>,
+    },
 }
 
 impl<'a> NodeParser<'a, Self> for Expr<'a> {
-    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
         recursive(|expr| {
+            // let inline_expr = recursive(|inline_expr| {
+            //
+            // })
             let literal = Literal::parser().map(Expr::Literal);
 
             let r#match = keyword("match")
@@ -211,22 +223,10 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                         .collect::<Vec<_>>()
                         .delimited_by(just("{").padded(), just("}").padded()),
                 )
-                .padded()
                 .map(|(value, arms)| Expr::Match {
                     value: Box::new(value),
                     arms,
                 });
-
-            let r#let = keyword("let")
-                .ignore_then(expr.clone().padded())
-                .then(
-                    just(":")
-                        .padded()
-                        .ignore_then(TypeSignature::parser())
-                        .or_not(),
-                )
-                .then(just("=").padded().ignore_then(expr.clone()).or_not())
-                .map(|((lhs, ty), rhs)| Stmt::Let(lhs, ty, rhs));
 
             let assignment = expr
                 .clone()
@@ -236,7 +236,7 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                 .map(|(lhs, rhs)| Stmt::Assignment(lhs, rhs));
 
             let r#return = keyword("return")
-                .ignore_then(expr.clone().padded())
+                .ignore_then(expr.clone())
                 .map(Stmt::Return);
 
             let block = recursive(|block| {
@@ -260,29 +260,46 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                     });
 
                 let stmt = choice((
-                    r#let,      //
-                    assignment, //
+                    assignment,
                     r#return,
                     r#while,
                     r#for,
                     expr.clone().map(Stmt::Expression),
-                ))
-                .then_ignore(one_of(";\n"))
-                .padded();
+                ));
 
-                stmt.repeated()
+                stmt.separated_by(just(";").padded())
+                    .allow_trailing()
                     .collect::<Vec<_>>()
-                    .then(expr.clone())
+                    .then(expr.clone().or_not())
+                    .then(just(";").padded().or_not())
                     .delimited_by(just("{").padded(), just("}").padded())
-                    .map(|(x, terminator)| {
-                        // let terminator = x.pop().expect("block to have a terminator");
-
-                        Expr::Block {
-                            body: x,
-                            terminator: Box::new(terminator),
-                        }
+                    .map(|((mut body, terminator), y)| {
+                        let terminator = match terminator {
+                            Some(terminator) if y.is_some() => {
+                                body.push(Stmt::Expression(terminator));
+                                None
+                            }
+                            Some(terminator) => Some(Box::new(terminator)),
+                            None => None,
+                        };
+                        Expr::Block { body, terminator }
                     })
             });
+
+            let r#let = keyword("let")
+                .ignore_then(expr.clone().padded())
+                .then(
+                    just(":")
+                        .padded()
+                        .ignore_then(TypeSignature::parser())
+                        .or_not(),
+                )
+                .then(just("=").padded().ignore_then(expr.clone()).or_not())
+                .map(|((lhs, ty), rhs)| Expr::Let {
+                    pattern: Box::new(lhs),
+                    ty,
+                    value: rhs.map(Box::new),
+                });
 
             let r#loop = keyword("loop")
                 .ignore_then(block.clone())
@@ -292,20 +309,6 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
             let r#break = keyword("break")
                 .then(expr.clone().or_not())
                 .map(|(_, val)| Expr::Break(val.map(Box::new)));
-
-            // let block = stmt
-            //     .repeated()
-            //     .collect::<Vec<_>>()
-            //     .then(expr.clone())
-            //     .delimited_by(just("{").padded(), just("}").padded())
-            //     .map(|(x, terminator)| {
-            //         // let terminator = x.pop().expect("block to have a terminator");
-            //
-            //         Expr::Block {
-            //             body: x,
-            //             terminator: Box::new(terminator),
-            //         }
-            //     });
 
             let r#if = recursive(|r#if| {
                 keyword("if")
@@ -336,7 +339,6 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
 
             let tuple = expr
                 .clone()
-                .padded()
                 .separated_by(just(","))
                 .allow_trailing()
                 .collect::<Vec<_>>()
@@ -370,51 +372,49 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
 
             let atom = choice((
                 literal,
+                struct_,
+                r#let,
                 r#loop,
                 r#if,
                 r#break,
                 r#match,
-                tuple,
                 array,
-                struct_,
                 unit,
-                ident().padded().map(Expr::Identifier),
                 block,
+                ident().padded().map(Expr::Identifier),
+                tuple,
                 expr.clone().padded().delimited_by(just("("), just(")")),
             ))
             .boxed();
 
-            let call = atom
-                .foldl(
+            let access = atom.pratt((
+                // index and call ops
+                postfix(
+                    3,
+                    expr.clone().delimited_by(just("["), just("]")),
+                    |lhs, rhs| Expr::Index(Box::new(lhs), Box::new(rhs)),
+                ),
+                postfix(
+                    3,
                     expr.clone()
-                        .separated_by(just(','))
+                        .separated_by(just(',').padded())
                         .allow_trailing()
                         .collect::<Vec<_>>()
-                        .delimited_by(just("("), just(")"))
-                        .repeated(),
-                    |lhs, args| {
-                        return Expr::Call(Box::new(lhs), args);
-                    },
-                )
-                .boxed();
-
-            let index_access = call.foldl(
-                expr.clone().delimited_by(just("["), just("]")).repeated(),
-                |lhs, rhs| Expr::Index(Box::new(lhs), Box::new(rhs)),
-            );
-
-            let field_access = index_access
-                .foldl(just(".").ignore_then(ident()).repeated(), |lhs, rhs| {
+                        .delimited_by(just('(').padded(), just(')').padded()),
+                    |lhs, args| Expr::Call(Box::new(lhs), args),
+                ),
+                postfix(3, just(".").ignore_then(ident()), |lhs, rhs| {
                     Expr::StructField(Box::new(lhs), rhs)
-                });
-
-            let tuple_access = field_access.foldl(
-                just(".").ignore_then(chumsky::text::int(10)).repeated(),
-                |lhs, rhs| {
-                    let rhs = str::parse::<usize>(&rhs).unwrap();
-                    Expr::TupleField(Box::new(lhs), rhs)
-                },
-            );
+                }),
+                postfix(
+                    3,
+                    just(".").ignore_then(chumsky::text::int(10)),
+                    |lhs, rhs| {
+                        let rhs = str::parse::<usize>(rhs).unwrap();
+                        Expr::TupleField(Box::new(lhs), rhs)
+                    },
+                ),
+            ));
 
             let unary_op = just("-")
                 .map(|_| UnaryOp::Negation)
@@ -426,7 +426,7 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                 unary_op
                     .then(unary)
                     .map(|(op, expr)| Expr::Unary(op, Box::new(expr)))
-                    .or(tuple_access)
+                    .or(access)
             })
             .boxed();
 

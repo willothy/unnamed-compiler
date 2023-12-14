@@ -1,4 +1,6 @@
 use chumsky::{
+    error::Rich,
+    extra,
     primitive::{choice, just},
     recursive::recursive,
     text::{ident, whitespace},
@@ -57,7 +59,7 @@ impl<'a> TypePath<'a> {
 }
 
 impl<'a> NodeParser<'a, TypePathSegment<'a>> for TypePathSegment<'a> {
-    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
         ident().map(|s| match s {
             "package" => Self::Package,
             "self" => Self::SelfModule,
@@ -68,7 +70,7 @@ impl<'a> NodeParser<'a, TypePathSegment<'a>> for TypePathSegment<'a> {
 }
 
 impl<'a> NodeParser<'a, TypePath<'a>> for TypePath<'a> {
-    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
         TypePathSegment::parser()
             .separated_by(just("::"))
             .at_least(2)
@@ -103,7 +105,7 @@ pub enum TypeSignature<'a> {
 }
 
 impl<'a> NodeParser<'a, TypeSignature<'a>> for TypeSignature<'a> {
-    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
         recursive(|this| {
             let unit = just("()").map(|_| TypeSignature::Unit);
 
@@ -113,10 +115,23 @@ impl<'a> NodeParser<'a, TypeSignature<'a>> for TypeSignature<'a> {
                 .map(|t| TypeSignature::Array(Box::new(t)));
 
             let generic_application = TypePath::parser()
-                .then(comma_separated(this.clone()).delimited_by(just("<"), just(">")))
+                .then(
+                    this.clone()
+                        .separated_by(just(",").then_ignore(whitespace()))
+                        .collect::<Vec<_>>()
+                        .delimited_by(just("<"), just(">"))
+                        .boxed(),
+                )
                 .map(|(name, args)| TypeSignature::GenericApplication(name, args));
 
-            let tuple = comma_separated(this.clone())
+            // let generic_application = TypePath::parser()
+            //     .then(comma_separated(this.clone()).delimited_by(just("<"), just(">")))
+            //     .map(|(name, args)| TypeSignature::GenericApplication(name, args));
+
+            let tuple = this
+                .clone()
+                .separated_by(just(",").then_ignore(whitespace()))
+                .collect::<Vec<_>>()
                 .delimited_by(just("("), just(")"))
                 .map(|t| TypeSignature::Tuple(t));
 

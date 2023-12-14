@@ -1,4 +1,6 @@
 use chumsky::{
+    error::Rich,
+    extra,
     primitive::{choice, just, one_of},
     text::keyword,
     Parser,
@@ -8,8 +10,6 @@ use crate::{expr::Expr, ty::TypeSignature, NodeParser};
 
 #[derive(Debug, PartialEq)]
 pub enum Stmt<'a> {
-    /// A let binding, e.g. `let x: int = 42;`
-    Let(Expr<'a>, Option<TypeSignature<'a>>, Option<Expr<'a>>),
     /// An assignment, e.g. `x = 42;` or `let Point { x, y } = point;`
     Assignment(Expr<'a>, Expr<'a>),
     /// A return statement
@@ -27,41 +27,29 @@ pub enum Stmt<'a> {
     },
 }
 
-impl<'a> NodeParser<'a, Stmt<'a>> for Stmt<'a> {
-    fn parser() -> impl Parser<'a, &'a str, Self> + Clone {
-        let r#let = keyword("let")
-            .ignore_then(Expr::parser().padded())
-            .then(
-                just(":")
-                    .padded()
-                    .ignore_then(TypeSignature::parser())
-                    .or_not(),
-            )
-            .then(just("=").padded().ignore_then(Expr::parser()).or_not())
-            .map(|((lhs, ty), rhs)| Self::Let(lhs, ty, rhs));
-
-        let assignment = Expr::parser()
-            .padded()
-            .then_ignore(just("=").padded())
-            .then(Expr::parser())
-            .map(|(lhs, rhs)| Self::Assignment(lhs, rhs));
-
-        let r#return = keyword("return")
-            .ignore_then(Expr::parser())
-            .map(Self::Return);
-
-        choice((
-            r#let,      //
-            assignment, //
-            r#return,
-            // Self::return_stmt(),
-            // Self::while_loop(),
-            // Self::for_loop(),
-            // Self::expression(),
-        ))
-        .then_ignore(one_of(";\n").or_not())
-    }
-}
+// impl<'a> NodeParser<'a, Stmt<'a>> for Stmt<'a> {
+//     fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone {
+//         let assignment = Expr::parser()
+//             .padded()
+//             .then_ignore(just("=").padded())
+//             .then(Expr::parser())
+//             .map(|(lhs, rhs)| Self::Assignment(lhs, rhs));
+//
+//         let r#return = keyword("return")
+//             .ignore_then(Expr::parser())
+//             .map(Self::Return);
+//
+//         choice((
+//             assignment, //
+//             r#return,
+//             // Self::return_stmt(),
+//             // Self::while_loop(),
+//             // Self::for_loop(),
+//             // Self::expression(),
+//         ))
+//         .then_ignore(one_of(";\n").or_not())
+//     }
+// }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum BinaryOp {
@@ -88,7 +76,7 @@ pub enum BinaryOp {
 }
 
 impl<'a> NodeParser<'a, BinaryOp> for BinaryOp {
-    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
         choice((
             just("+").map(|_| Self::Add),
             just("-").map(|_| Self::Subtract),
@@ -119,7 +107,7 @@ pub enum UnaryOp {
 }
 
 impl<'a> NodeParser<'a, UnaryOp> for UnaryOp {
-    fn parser() -> impl Parser<'a, &'a str, Self> + Clone + 'a {
+    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
         choice((
             just("*").to(Self::Dereference),
             just("&").to(Self::Reference),

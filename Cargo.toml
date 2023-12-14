@@ -8,4 +8,4 @@ name = "crane"
 path = "src/lib.rs"
 
 [dependencies]
-chumsky = "1.0.0-alpha.6"
+chumsky = { version = "1.0.0-alpha.6", features = ["pratt"] }
