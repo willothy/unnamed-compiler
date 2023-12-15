@@ -526,7 +526,7 @@ fn parse_tuple_init_expr() {
 }
 
 #[test]
-fn pare_struct_init() {
+fn parse_struct_init() {
     let input = "Foo { bar: 42 }";
     let result = Expr::parser().parse(input);
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
@@ -574,7 +574,7 @@ fn pare_struct_init() {
 }
 
 #[test]
-fn test_if_expr() {
+fn if_expr() {
     let input = "if foo { 42 }";
     let result = Expr::parser().parse(input);
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
@@ -635,7 +635,7 @@ fn test_if_expr() {
 }
 
 #[test]
-fn test_match_expr() {
+fn match_expr() {
     let input = "match foo { 42 => 3.14 }";
     let result = Expr::parser().parse(input);
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
@@ -652,7 +652,7 @@ fn test_match_expr() {
 }
 
 #[test]
-fn test_tuple_access() {
+fn tuple_access() {
     let input = "foo.0";
     let result = Expr::parser().parse(input);
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
