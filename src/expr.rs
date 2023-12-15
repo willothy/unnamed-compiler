@@ -200,10 +200,15 @@ pub enum Expr<'a> {
         ty: Option<TypeSignature<'a>>,
         value: Option<Box<Expr<'a>>>,
     },
+    StaticAccess(Box<Expr<'a>>, &'a str),
 }
 
 impl<'a> NodeParser<'a, Self> for Expr<'a> {
     fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
+        // TODO: Differentiate between lhs and rhs expressions
+        // - LHS expressions are used in let bindings, match patterns, and destructuring
+        // - Differentiation based on context is necesssary due to ambiguity between function
+        // calls, enum variant constructors, and tuple struct constructors.
         recursive(|expr| {
             let literal = Literal::parser().map(Expr::Literal);
 
@@ -420,6 +425,10 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                         Expr::TupleField(Box::new(lhs), rhs)
                     },
                 ),
+                // module access
+                postfix(3, just("::").ignore_then(ident()), |lhs, rhs| {
+                    Expr::StaticAccess(Box::new(lhs), rhs)
+                }),
             ));
 
             let unary_op = just("-")

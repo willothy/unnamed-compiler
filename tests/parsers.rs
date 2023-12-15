@@ -848,3 +848,56 @@ fn test_small_program() {
         },
     );
 }
+
+#[test]
+fn test_if_let() {
+    let input = r#"
+if let foo = 42 {
+    foo
+} else {
+    0
+}
+"#;
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::If {
+            cond: Box::new(Expr::Let {
+                pattern: Box::new(Expr::Identifier("foo")),
+                ty: None,
+                value: Some(Box::new(Expr::Literal(Literal::Integer(42)))),
+            }),
+            body: Box::new(Expr::Block {
+                body: vec![],
+                terminator: Some(Box::new(Expr::Identifier("foo")))
+            }),
+            alternate: Some(Box::new(Expr::Block {
+                body: vec![],
+                terminator: Some(Box::new(Expr::Literal(Literal::Integer(0))))
+            })),
+        }
+    );
+}
+
+#[test]
+fn test_static_member_access() {
+    let input = "foo::bar";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::StaticAccess(Box::new(Expr::Identifier("foo")), "bar")
+    );
+
+    let input = "foo::bar::baz";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::StaticAccess(
+            Box::new(Expr::StaticAccess(Box::new(Expr::Identifier("foo")), "bar")),
+            "baz"
+        )
+    );
+}
