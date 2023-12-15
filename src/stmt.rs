@@ -1,12 +1,11 @@
 use chumsky::{
     error::Rich,
     extra,
-    primitive::{choice, just, one_of},
-    text::keyword,
+    primitive::{choice, just},
     Parser,
 };
 
-use crate::{expr::Expr, ty::TypeSignature, NodeParser};
+use crate::{expr::Expr, NodeParser};
 
 #[derive(Debug, PartialEq)]
 pub enum Stmt<'a> {
@@ -27,29 +26,22 @@ pub enum Stmt<'a> {
     },
 }
 
-// impl<'a> NodeParser<'a, Stmt<'a>> for Stmt<'a> {
-//     fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone {
-//         let assignment = Expr::parser()
-//             .padded()
-//             .then_ignore(just("=").padded())
-//             .then(Expr::parser())
-//             .map(|(lhs, rhs)| Self::Assignment(lhs, rhs));
-//
-//         let r#return = keyword("return")
-//             .ignore_then(Expr::parser())
-//             .map(Self::Return);
-//
-//         choice((
-//             assignment, //
-//             r#return,
-//             // Self::return_stmt(),
-//             // Self::while_loop(),
-//             // Self::for_loop(),
-//             // Self::expression(),
-//         ))
-//         .then_ignore(one_of(";\n").or_not())
-//     }
-// }
+impl<'a> Stmt<'a> {
+    pub fn is_terminator(&self) -> bool {
+        match self {
+            Stmt::Return(_) => true,
+            Stmt::Expression(_) => true,
+            Stmt::Assignment(_, _) | Stmt::While { .. } | Stmt::For { .. } => false,
+        }
+    }
+
+    pub fn is_return(&self) -> bool {
+        match self {
+            Stmt::Return(_) => true,
+            _ => false,
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum BinaryOp {

@@ -479,66 +479,66 @@ fn pare_struct_init() {
     );
 }
 
-// #[test]
-// fn test_if_expr() {
-//     let input = "if foo { 42 }";
-//     let result = Expr::parser().parse(input);
-//     assert!(!result.has_errors(), "{:#?}", result.into_errors());
-//     assert_eq!(
-//         result.output().unwrap(),
-//         &Expr::If {
-//             cond: Box::new(Expr::Identifier("foo")),
-//             body: Box::new(Expr::Block {
-//                 body: vec![],
-//                 terminator: Some(Box::new(Expr::Literal(Literal::Integer(42))))
-//             }),
-//             alternate: None,
-//         }
-//     );
-//
-//     let input = "if foo { 42 } else { 3.14 }";
-//     let result = Expr::parser().parse(input);
-//     assert!(!result.has_errors(), "{:#?}", result.into_errors());
-//     assert_eq!(
-//         result.output().unwrap(),
-//         &Expr::If {
-//             cond: Box::new(Expr::Identifier("foo")),
-//             body: Box::new(Expr::Block {
-//                 body: vec![Stmt::Expression(Expr::Literal(Literal::Integer(42)))],
-//                 terminator: None
-//             }),
-//             alternate: Some(Box::new(Expr::Block {
-//                 body: vec![Stmt::Expression(Expr::Literal(Literal::Float(3.14)))],
-//                 terminator: None
-//             })),
-//         }
-//     );
-//
-//     let input = "if foo { 42 } else if bar { 3.14 } else { 0 }";
-//     let result = Expr::parser().parse(input);
-//     assert!(!result.has_errors(), "{:#?}", result.into_errors());
-//     assert_eq!(
-//         result.output().unwrap(),
-//         &Expr::If {
-//             cond: Box::new(Expr::Identifier("foo")),
-//             body: Box::new(Expr::Block {
-//                 body: vec![Stmt::Expression(Expr::Literal(Literal::Integer(42)))],
-//                 terminator: None
-//             }),
-//             alternate: Some(Box::new(Expr::If {
-//                 cond: Box::new(Expr::Identifier("bar")),
-//                 body: Box::new(Expr::Block {
-//                     body: vec![Stmt::Expression(Expr::Literal(Literal::Float(3.14)))],
-//                     terminator: None
-//                 }),
-//                 alternate: Some(Box::new(Expr::Block {
-//                     body: vec![Stmt::Expression(Expr::Literal(Literal::Integer(0)))],
-//                     terminator: None
-//                 })),
-//             })),
-//         }
-//     );
-// }
+#[test]
+fn test_if_expr() {
+    let input = "if foo { 42 }";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::If {
+            cond: Box::new(Expr::Identifier("foo")),
+            body: Box::new(Expr::Block {
+                body: vec![],
+                terminator: Some(Box::new(Expr::Literal(Literal::Integer(42))))
+            }),
+            alternate: None,
+        }
+    );
+
+    let input = "if foo { 42 } else { 3.14 }";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::If {
+            cond: Box::new(Expr::Identifier("foo")),
+            body: Box::new(Expr::Block {
+                body: vec![],
+                terminator: Some(Box::new(Expr::Literal(Literal::Integer(42))))
+            }),
+            alternate: Some(Box::new(Expr::Block {
+                body: vec![],
+                terminator: Some(Box::new(Expr::Literal(Literal::Float(3.14))))
+            })),
+        }
+    );
+
+    let input = "if foo { 42 } else if bar { 3.14 } else { 0 }";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Expr::If {
+            cond: Box::new(Expr::Identifier("foo")),
+            body: Box::new(Expr::Block {
+                body: vec![],
+                terminator: Some(Box::new(Expr::Literal(Literal::Integer(42))))
+            }),
+            alternate: Some(Box::new(Expr::If {
+                cond: Box::new(Expr::Identifier("bar")),
+                body: Box::new(Expr::Block {
+                    body: vec![],
+                    terminator: Some(Box::new(Expr::Literal(Literal::Float(3.14))))
+                }),
+                alternate: Some(Box::new(Expr::Block {
+                    body: vec![],
+                    terminator: Some(Box::new(Expr::Literal(Literal::Integer(0))))
+                })),
+            })),
+        }
+    );
+}
 
 #[test]
 fn test_match_expr() {

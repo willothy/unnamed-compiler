@@ -4,9 +4,9 @@ use chumsky::{
     error::Rich,
     extra,
     pratt::postfix,
-    primitive::{choice, end, just, none_of, one_of, todo},
+    primitive::{choice, just, none_of},
     recursive::recursive,
-    text::{ident, keyword, whitespace},
+    text::{ident, keyword},
     IterParser, Parser,
 };
 
@@ -266,22 +266,31 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                     r#for,
                     expr.clone().map(Stmt::Expression),
                 ));
-
+                // , terminator
                 stmt.separated_by(just(";").padded())
-                    .allow_trailing()
                     .collect::<Vec<_>>()
-                    .then(expr.clone().or_not())
                     .then(just(";").padded().or_not())
                     .delimited_by(just("{").padded(), just("}").padded())
-                    .map(|((mut body, terminator), y)| {
-                        let terminator = match terminator {
-                            Some(terminator) if y.is_some() => {
-                                body.push(Stmt::Expression(terminator));
-                                None
-                            }
-                            Some(terminator) => Some(Box::new(terminator)),
-                            None => None,
+                    .map(|(mut body, trailing)| {
+                        let terminator = match body.last() {
+                            Some(terminator) => match terminator {
+                                Stmt::Return(_) => {
+                                    let Stmt::Return(expr) = body.pop().unwrap() else {
+                                        unreachable!();
+                                    };
+                                    Some(Box::new(expr))
+                                }
+                                Stmt::Expression(_) if trailing.is_none() => {
+                                    let Stmt::Expression(expr) = body.pop().unwrap() else {
+                                        unreachable!();
+                                    };
+                                    Some(Box::new(expr))
+                                }
+                                _ => None,
+                            },
+                            _ => None,
                         };
+
                         Expr::Block { body, terminator }
                     })
             });
