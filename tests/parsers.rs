@@ -108,6 +108,19 @@ fn parse_type_path() {
 }
 
 #[test]
+fn parse_bool_literal() {
+    let input = "true";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output().unwrap(), &Literal::Boolean(true));
+
+    let input = "false";
+    let result = Literal::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output().unwrap(), &Literal::Boolean(false));
+}
+
+#[test]
 fn parse_float_literal() {
     let input = "3.14";
     let result = Literal::parser().parse(input);
@@ -233,6 +246,87 @@ fn unop_parser() {
             UnaryOp::Not,
             UnaryOp::BitwiseNot,
         ]
+    );
+}
+
+#[test]
+fn unary_expr() {
+    let input = "!true";
+
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::Unary(
+            UnaryOp::Not,
+            Box::new(Expr::Literal(Literal::Boolean(true)))
+        )
+    );
+
+    let input = "-42";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::Unary(
+            UnaryOp::Negation,
+            Box::new(Expr::Literal(Literal::Integer(42)))
+        )
+    );
+
+    let input = "&foo";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::Unary(UnaryOp::Reference, Box::new(Expr::Identifier("foo")),)
+    );
+
+    let input = "*foo";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::Unary(UnaryOp::Dereference, Box::new(Expr::Identifier("foo")),)
+    );
+
+    let input = "!foo + bar";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::Binary(
+            Box::new(Expr::Unary(UnaryOp::Not, Box::new(Expr::Identifier("foo")))),
+            BinaryOp::Add,
+            Box::new(Expr::Identifier("bar")),
+        )
+    );
+
+    let input = "foo +!bar";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::Binary(
+            Box::new(Expr::Identifier("foo")),
+            BinaryOp::Add,
+            Box::new(Expr::Unary(UnaryOp::Not, Box::new(Expr::Identifier("bar")))),
+        )
+    );
+
+    let input = "*test() + 42";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::Binary(
+            Box::new(Expr::Unary(
+                UnaryOp::Dereference,
+                Box::new(Expr::Call(Box::new(Expr::Identifier("test")), vec![]))
+            )),
+            BinaryOp::Add,
+            Box::new(Expr::Literal(Literal::Integer(42))),
+        )
     );
 }
 
@@ -710,6 +804,7 @@ fn test_small_program() {
 {
     let foo = 42;
     let bar = 3.14;
+    foo = floor(bar);
     console.log(foo + bar);
 }
     "#;
@@ -730,6 +825,13 @@ fn test_small_program() {
                     ty: None,
                     value: Some(Box::new(Expr::Literal(Literal::Float(3.14)))),
                 }),
+                Stmt::Assignment(
+                    Expr::Identifier("foo"),
+                    Expr::Call(
+                        Box::new(Expr::Identifier("floor")),
+                        vec![Expr::Identifier("bar")]
+                    )
+                ),
                 Stmt::Expression(Expr::Call(
                     Box::new(Expr::StructField(
                         Box::new(Expr::Identifier("console")),

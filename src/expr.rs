@@ -205,9 +205,6 @@ pub enum Expr<'a> {
 impl<'a> NodeParser<'a, Self> for Expr<'a> {
     fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
         recursive(|expr| {
-            // let inline_expr = recursive(|inline_expr| {
-            //
-            // })
             let literal = Literal::parser().map(Expr::Literal);
 
             let r#match = keyword("match")
@@ -426,10 +423,10 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
             ));
 
             let unary_op = just("-")
-                .map(|_| UnaryOp::Negation)
-                .or(just("!").map(|_| UnaryOp::Not))
-                .or(just("*").map(|_| UnaryOp::Dereference))
-                .or(just("&").map(|_| UnaryOp::Reference));
+                .to(UnaryOp::Negation)
+                .or(just("!").to(UnaryOp::Not))
+                .or(just("*").to(UnaryOp::Dereference))
+                .or(just("&").to(UnaryOp::Reference));
 
             let unary = recursive(|unary| {
                 unary_op
@@ -441,33 +438,33 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
 
             let bin_parsers = [
                 just("*")
-                    .map(|_| BinaryOp::Multiply)
-                    .or(just("/").map(|_| BinaryOp::Divide))
+                    .to(BinaryOp::Multiply)
+                    .or(just("/").to(BinaryOp::Divide))
                     .boxed(),
                 just("+")
-                    .map(|_| BinaryOp::Add)
-                    .or(just("/").map(|_| BinaryOp::Subtract))
+                    .to(BinaryOp::Add)
+                    .or(just("/").to(BinaryOp::Subtract))
                     .boxed(),
-                just("%").map(|_| BinaryOp::Modulo).boxed(),
+                just("%").to(BinaryOp::Modulo).boxed(),
                 just("<<")
-                    .map(|_| BinaryOp::ShiftLeft)
-                    .or(just(">>").map(|_| BinaryOp::ShiftRight))
+                    .to(BinaryOp::ShiftLeft)
+                    .or(just(">>").to(BinaryOp::ShiftRight))
                     .boxed(),
                 just("<")
-                    .map(|_| BinaryOp::LessThan)
-                    .or(just(">").map(|_| BinaryOp::GreaterThan))
-                    .or(just("<=").map(|_| BinaryOp::LessThanOrEqual))
-                    .or(just(">=").map(|_| BinaryOp::GreaterThanOrEqual))
+                    .to(BinaryOp::LessThan)
+                    .or(just(">").to(BinaryOp::GreaterThan))
+                    .or(just("<=").to(BinaryOp::LessThanOrEqual))
+                    .or(just(">=").to(BinaryOp::GreaterThanOrEqual))
                     .boxed(),
                 just("==")
-                    .map(|_| BinaryOp::Equal)
-                    .or(just("!=").map(|_| BinaryOp::NotEqual))
+                    .to(BinaryOp::Equal)
+                    .or(just("!=").to(BinaryOp::NotEqual))
                     .boxed(),
-                just("&").map(|_| BinaryOp::And).boxed(),
-                just("^").map(|_| BinaryOp::Xor).boxed(),
-                just("|").map(|_| BinaryOp::Or).boxed(),
-                just("&&").map(|_| BinaryOp::LogicalAnd).boxed(),
-                just("||").map(|_| BinaryOp::LogicalOr).boxed(),
+                just("&").to(BinaryOp::And).boxed(),
+                just("^").to(BinaryOp::Xor).boxed(),
+                just("|").to(BinaryOp::Or).boxed(),
+                just("&&").to(BinaryOp::LogicalAnd).boxed(),
+                just("||").to(BinaryOp::LogicalOr).boxed(),
             ];
 
             let mut binary = unary.boxed();
