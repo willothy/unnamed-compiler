@@ -6,29 +6,29 @@ use chumsky::{
 use crate::{expr::Expr, module::Import, NodeParser};
 
 #[derive(Debug, PartialEq)]
-pub enum Stmt<'a> {
+pub enum Stmt {
     /// An assignment, e.g. `x = 42;` or `let Point { x, y } = point;`
-    Assignment(Expr<'a>, Expr<'a>),
+    Assignment(Expr, Expr),
     /// An expression statement.
-    Expression(Expr<'a>),
+    Expression(Expr),
     /// While loops cannot be used as expressions because their resulting value cannot be
     /// statically guaranteed.
-    While { condition: Expr<'a>, body: Expr<'a> },
+    While { condition: Expr, body: Expr },
     /// For loops follow the same rules as while loops
     For {
-        pattern: Expr<'a>,
-        iter: Expr<'a>,
-        body: Expr<'a>,
+        pattern: Expr,
+        iter: Expr,
+        body: Expr,
     },
     /// A return statement
-    Return(Option<Expr<'a>>),
+    Return(Option<Expr>),
     /// A break statement, e.g. `break;` or `break 42;`
-    Break(Option<Expr<'a>>),
+    Break(Option<Expr>),
     /// A `use` in the statement position, e.g. `use foo::bar;`
-    Use(Import<'a>),
+    Use(Import),
 }
 
-impl<'a> Stmt<'a> {
+impl Stmt {
     pub fn is_return(&self) -> bool {
         match self {
             Stmt::Return(_) => true,

@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::BTreeMap};
+use std::{collections::BTreeMap, rc::Rc};
 
 use chumsky::{
     pratt::postfix,
@@ -16,9 +16,18 @@ use crate::{
     NodeParser,
 };
 
+#[derive(Debug, PartialEq)]
+pub enum SharedCow<T>
+where
+    T: ?Sized,
+{
+    Shared(Rc<T>),
+    Owned(String),
+}
+
 /// Represents a literal value at parse level.
 #[derive(Debug, PartialEq)]
-pub enum Literal<'a> {
+pub enum Literal {
     /// A unit literal, e.g. `()`
     Unit,
     /// An integer literal, e.g. `42` or `0x2A`
@@ -26,20 +35,20 @@ pub enum Literal<'a> {
     /// A float literal, e.g. `3.14` or `0.1e-10`
     Float(f64),
     /// A string literal, e.g. `"Hello, world!"`
-    String(Cow<'a, str>),
+    String(SharedCow<str>),
     /// A utf-8 character literal, e.g. `'a'`
     Char(char),
     /// A boolean literal, e.g. `true` or `false`
     Boolean(bool),
     /// A tuple literal, e.g. `(1, 2, 3)`
-    Tuple(Vec<Expr<'a>>),
+    Tuple(Vec<Expr>),
     /// A struct literal / initializer, e.g. `Struct { field: 42 }`
-    Struct(TypePath<'a>, BTreeMap<&'a str, Expr<'a>>),
+    Struct(TypePath, BTreeMap<Rc<str>, Expr>),
     /// An array initializer, e.g. `[1, 2, 3]`
-    Array(Vec<Expr<'a>>),
+    Array(Vec<Expr>),
 }
 
-impl<'a> NodeParser<'a, Self> for Literal<'a> {
+impl<'a> NodeParser<'a, Self> for Literal {
     fn parser() -> impl crate::Parser<'a, Self> {
         let unit = just("()").map(|_| Literal::Unit);
 
@@ -109,7 +118,7 @@ impl<'a> NodeParser<'a, Self> for Literal<'a> {
             .repeated()
             .collect::<Vec<char>>()
             .delimited_by(just('"'), just('"'))
-            .map(|s| Literal::String(Cow::Owned(s.into_iter().collect::<String>())));
+            .map(|s| Literal::String(SharedCow::Shared(s.into_iter().collect::<String>().into())));
 
         let char = none_of("\\'")
             .or(escape)
@@ -120,77 +129,69 @@ impl<'a> NodeParser<'a, Self> for Literal<'a> {
             .map(|_| Literal::Boolean(true))
             .or(just("false").map(|_| Literal::Boolean(false)));
 
-        choice((
-            unit,    //
-            float,   //
-            integer, //
-            string,  //
-            char,    //
-            boolean, //,
-        ))
-        .padded()
+        choice((unit, float, integer, string, char, boolean)).padded()
     }
 }
 
 #[derive(Debug, PartialEq)]
-pub struct MatchArm<'a> {
-    pub pattern: Expr<'a>,
-    pub body: Expr<'a>,
+pub struct MatchArm {
+    pub pattern: Expr,
+    pub body: Expr,
 }
 
 /// Represents an expression at parse level.
 #[derive(Debug, PartialEq)]
-pub enum Expr<'a> {
+pub enum Expr {
     /// A literal value, e.g. `42` or `true`
-    Literal(Literal<'a>),
+    Literal(Literal),
     /// A binary expression, e.g. `1 + 2` or `foo && bar`
-    Binary(Box<Expr<'a>>, BinaryOp, Box<Expr<'a>>),
+    Binary(Box<Expr>, BinaryOp, Box<Expr>),
     /// A unary expression, e.g. `*foo` or `-42`
-    Unary(UnaryOp, Box<Expr<'a>>),
+    Unary(UnaryOp, Box<Expr>),
     /// An identifier, e.g. `foo`
-    Identifier(&'a str),
+    Identifier(Rc<str>),
     /// A call expression, e.g. `foo(42, 3.14)`
-    Call(Box<Expr<'a>>, Vec<Expr<'a>>),
+    Call(Box<Expr>, Vec<Expr>),
     /// An array index expression, e.g. `foo[42]`
-    Index(Box<Expr<'a>>, Box<Expr<'a>>),
+    Index(Box<Expr>, Box<Expr>),
     /// A struct field access, e.g. `foo.bar`
     /// This is used for both struct fields and enum variants.
-    StructField(Box<Expr<'a>>, &'a str),
+    StructField(Box<Expr>, Rc<str>),
     /// A tuple field access, e.g. `foo.0`
-    TupleField(Box<Expr<'a>>, usize),
+    TupleField(Box<Expr>, usize),
     /// A block expression, e.g. `{ let x = 42; x }`
     ///
     /// The last expression in the block is used as the return value,
     /// but early returns are allowed with the `return` statement.
     Block {
-        body: Vec<Stmt<'a>>,
-        terminator: Option<Box<Expr<'a>>>,
+        body: Vec<Stmt>,
+        terminator: Option<Box<Expr>>,
     },
     If {
-        cond: Box<Expr<'a>>,
-        body: Box<Expr<'a>>,
-        alternate: Option<Box<Expr<'a>>>,
+        cond: Box<Expr>,
+        body: Box<Expr>,
+        alternate: Option<Box<Expr>>,
     },
     /// Rust-style loops work as expressions, but *must* yield a value
     /// if used as such.
-    Loop(Box<Expr<'a>>),
+    Loop(Box<Expr>),
     Match {
-        value: Box<Expr<'a>>,
-        arms: Vec<MatchArm<'a>>,
+        value: Box<Expr>,
+        arms: Vec<MatchArm>,
     },
     /// A let binding, e.g. `let x: int = 42;` or `let Point { x, y } = point;`
     Let {
-        pattern: Box<Expr<'a>>,
-        ty: Option<TypeSignature<'a>>,
-        value: Option<Box<Expr<'a>>>,
+        pattern: Box<Expr>,
+        ty: Option<TypeSignature>,
+        value: Option<Box<Expr>>,
     },
-    StaticAccess(Box<Expr<'a>>, &'a str),
-    Range(Option<Box<Expr<'a>>>, Option<Box<Expr<'a>>>),
-    RangeInclusive(Option<Box<Expr<'a>>>, Option<Box<Expr<'a>>>),
+    StaticAccess(Box<Expr>, Rc<str>),
+    Range(Option<Box<Expr>>, Option<Box<Expr>>),
+    RangeInclusive(Option<Box<Expr>>, Option<Box<Expr>>),
 }
 
-impl<'a> Expr<'a> {
-    pub fn block_parser(expr: impl crate::Parser<'a, Self>) -> impl crate::Parser<'a, Self> {
+impl Expr {
+    pub fn block_parser<'a>(expr: impl crate::Parser<'a, Self>) -> impl crate::Parser<'a, Self> {
         recursive(|block| {
             let assignment = expr
                 .clone()
@@ -272,7 +273,7 @@ impl<'a> Expr<'a> {
     }
 }
 
-impl<'a> NodeParser<'a, Self> for Expr<'a> {
+impl<'a> NodeParser<'a, Self> for Expr {
     fn parser() -> impl crate::Parser<'a, Self> {
         // TODO: Differentiate between lhs and rhs expressions
         // - LHS expressions are used in let bindings, match patterns, and destructuring
@@ -365,7 +366,7 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
             let struct_field = ident()
                 .then_ignore(just(":").padded())
                 .then(expr.clone())
-                .map(|(name, value)| (name, value));
+                .map(|(name, value)| (Rc::<str>::from(name), value));
 
             let struct_ = TypePath::parser()
                 .then_ignore(just("{").padded())
@@ -391,11 +392,10 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                 array,
                 unit,
                 block,
-                ident().padded().map(Expr::Identifier),
+                ident().padded().map(|s: &str| Expr::Identifier(s.into())),
                 tuple,
                 expr.clone().padded().delimited_by(just("("), just(")")),
-            ))
-            .boxed();
+            ));
 
             let access = atom.pratt((
                 // index and call ops
@@ -414,7 +414,7 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                     |lhs, args| Expr::Call(Box::new(lhs), args),
                 ),
                 postfix(3, just(".").ignore_then(ident()), |lhs, rhs| {
-                    Expr::StructField(Box::new(lhs), rhs)
+                    Expr::StructField(Box::new(lhs), Rc::<str>::from(rhs))
                 }),
                 postfix(
                     3,
@@ -426,7 +426,7 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                 ),
                 // module access
                 postfix(3, just("::").ignore_then(ident()), |lhs, rhs| {
-                    Expr::StaticAccess(Box::new(lhs), rhs)
+                    Expr::StaticAccess(Box::new(lhs), Rc::<str>::from(rhs))
                 }),
             ));
 

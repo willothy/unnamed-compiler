@@ -1,8 +1,8 @@
-use std::{borrow::Cow, collections::BTreeMap};
+use std::collections::BTreeMap;
 
 use chumsky::{IterParser, Parser};
 use crane::{
-    expr::{Expr, Literal},
+    expr::{Expr, Literal, SharedCow},
     module::{Declaration, Import, Variant},
     stmt::{BinaryOp, Stmt, UnaryOp},
     ty::{TypePath, TypePathSegment, TypeSignature},
@@ -19,16 +19,16 @@ fn parse_type_signature() {
         &TypeSignature::Function(
             vec![
                 TypeSignature::Named(TypePath {
-                    name: "Test",
+                    name: "Test".into(),
                     path: Some(vec![TypePathSegment::SelfModule])
                 }),
                 TypeSignature::Tuple(vec![
                     TypeSignature::Reference(Box::new(TypeSignature::Named(TypePath {
-                        name: "int",
+                        name: "int".into(),
                         path: None
                     }))),
                     TypeSignature::Array(Box::new(TypeSignature::Named(TypePath {
-                        name: "int",
+                        name: "int".into(),
                         path: None
                     }))),
                 ])
@@ -36,16 +36,16 @@ fn parse_type_signature() {
             Box::new(TypeSignature::Reference(Box::new(
                 TypeSignature::GenericApplication(
                     TypePath {
-                        name: "Vec",
+                        name: "Vec".into(),
                         path: Some(vec![TypePathSegment::Package])
                     },
                     vec![TypeSignature::Tuple(vec![
                         TypeSignature::Named(TypePath {
-                            name: "T",
+                            name: "T".into(),
                             path: None
                         }),
                         TypeSignature::Named(TypePath {
-                            name: "U",
+                            name: "U".into(),
                             path: None
                         })
                     ])]
@@ -65,11 +65,11 @@ fn parse_type_path() {
     assert_eq!(
         result.output().expect("to output a typepath"),
         &TypePath {
-            name: "type",
+            name: "type".into(),
             path: Some(vec![
                 TypePathSegment::Package,
-                TypePathSegment::Ident("path"),
-                TypePathSegment::Ident("to")
+                TypePathSegment::Ident("path".into()),
+                TypePathSegment::Ident("to".into())
             ])
         }
     );
@@ -80,7 +80,7 @@ fn parse_type_path() {
     assert_eq!(
         result.output().expect("to output a typepath"),
         &TypePath {
-            name: "type",
+            name: "type".into(),
             path: None
         }
     );
@@ -91,7 +91,7 @@ fn parse_type_path() {
     assert_eq!(
         result.output().expect("to output a typepath"),
         &TypePath {
-            name: "type",
+            name: "type".into(),
             path: Some(vec![TypePathSegment::Package])
         }
     );
@@ -102,7 +102,7 @@ fn parse_type_path() {
     assert_eq!(
         result.output().expect("to output a typepath"),
         &TypePath {
-            name: "type",
+            name: "type".into(),
             path: Some(vec![TypePathSegment::SelfModule])
         }
     );
@@ -169,7 +169,7 @@ fn parse_string_literal() {
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
     assert_eq!(
         result.output().unwrap(),
-        &Literal::String(Cow::Borrowed("Hello, world!"))
+        &Literal::String(SharedCow::Shared("Hello, world!".into()))
     );
 
     let input = "\"Hello, \\\"world!\\\"\"";
@@ -177,7 +177,7 @@ fn parse_string_literal() {
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
     assert_eq!(
         result.output().unwrap(),
-        &Literal::String(Cow::Borrowed("Hello, \"world!\""))
+        &Literal::String(SharedCow::Shared("Hello, \"world!\"".into()))
     );
 
     let input = "\"Hello, \\u{1F600}!\"";
@@ -185,7 +185,7 @@ fn parse_string_literal() {
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
     assert_eq!(
         result.output().unwrap(),
-        &Literal::String(Cow::Borrowed("Hello, 😀!"))
+        &Literal::String(SharedCow::Shared("Hello, 😀!".into()))
     );
 }
 
@@ -280,7 +280,7 @@ fn unary_expr() {
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
     assert_eq!(
         *result.output().unwrap(),
-        Expr::Unary(UnaryOp::Reference, Box::new(Expr::Identifier("foo")),)
+        Expr::Unary(UnaryOp::Reference, Box::new(Expr::Identifier("foo".into())),)
     );
 
     let input = "*foo";
@@ -288,7 +288,10 @@ fn unary_expr() {
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
     assert_eq!(
         *result.output().unwrap(),
-        Expr::Unary(UnaryOp::Dereference, Box::new(Expr::Identifier("foo")),)
+        Expr::Unary(
+            UnaryOp::Dereference,
+            Box::new(Expr::Identifier("foo".into())),
+        )
     );
 
     let input = "!foo + bar";
@@ -297,9 +300,12 @@ fn unary_expr() {
     assert_eq!(
         *result.output().unwrap(),
         Expr::Binary(
-            Box::new(Expr::Unary(UnaryOp::Not, Box::new(Expr::Identifier("foo")))),
+            Box::new(Expr::Unary(
+                UnaryOp::Not,
+                Box::new(Expr::Identifier("foo".into()))
+            )),
             BinaryOp::Add,
-            Box::new(Expr::Identifier("bar")),
+            Box::new(Expr::Identifier("bar".into())),
         )
     );
 
@@ -309,9 +315,12 @@ fn unary_expr() {
     assert_eq!(
         *result.output().unwrap(),
         Expr::Binary(
-            Box::new(Expr::Identifier("foo")),
+            Box::new(Expr::Identifier("foo".into())),
             BinaryOp::Add,
-            Box::new(Expr::Unary(UnaryOp::Not, Box::new(Expr::Identifier("bar")))),
+            Box::new(Expr::Unary(
+                UnaryOp::Not,
+                Box::new(Expr::Identifier("bar".into()))
+            )),
         )
     );
 
@@ -323,7 +332,10 @@ fn unary_expr() {
         Expr::Binary(
             Box::new(Expr::Unary(
                 UnaryOp::Dereference,
-                Box::new(Expr::Call(Box::new(Expr::Identifier("test")), vec![]))
+                Box::new(Expr::Call(
+                    Box::new(Expr::Identifier("test".into())),
+                    vec![]
+                ))
             )),
             BinaryOp::Add,
             Box::new(Expr::Literal(Literal::Integer(42))),
@@ -377,7 +389,7 @@ fn parse_call_expr() {
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
     assert_eq!(
         result.output().unwrap(),
-        &Expr::Call(Box::new(Expr::Identifier("foo")), vec![])
+        &Expr::Call(Box::new(Expr::Identifier("foo".into())), vec![])
     );
 
     let input = "foo(42)";
@@ -386,7 +398,7 @@ fn parse_call_expr() {
     assert_eq!(
         result.output().unwrap(),
         &Expr::Call(
-            Box::new(Expr::Identifier("foo")),
+            Box::new(Expr::Identifier("foo".into())),
             vec![Expr::Literal(Literal::Integer(42))]
         )
     );
@@ -397,7 +409,7 @@ fn parse_call_expr() {
     assert_eq!(
         result.output().unwrap(),
         &Expr::Call(
-            Box::new(Expr::Identifier("foo")),
+            Box::new(Expr::Identifier("foo".into())),
             vec![
                 Expr::Literal(Literal::Integer(42)),
                 Expr::Literal(Literal::Float(3.14))
@@ -414,7 +426,7 @@ fn index_expr() {
     assert_eq!(
         result.output().unwrap(),
         &Expr::Index(
-            Box::new(Expr::Identifier("foo")),
+            Box::new(Expr::Identifier("foo".into())),
             Box::new(Expr::Literal(Literal::Integer(42)))
         )
     );
@@ -427,7 +439,7 @@ fn parse_struct_access_expr() {
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
     assert_eq!(
         result.output().unwrap(),
-        &Expr::StructField(Box::new(Expr::Identifier("foo")), "bar")
+        &Expr::StructField(Box::new(Expr::Identifier("foo".into())), "bar".into())
     );
 
     let input = "foo.bar.baz";
@@ -436,8 +448,11 @@ fn parse_struct_access_expr() {
     assert_eq!(
         result.output().unwrap(),
         &Expr::StructField(
-            Box::new(Expr::StructField(Box::new(Expr::Identifier("foo")), "bar")),
-            "baz"
+            Box::new(Expr::StructField(
+                Box::new(Expr::Identifier("foo".into())),
+                "bar".into()
+            )),
+            "baz".into()
         )
     );
 
@@ -447,8 +462,8 @@ fn parse_struct_access_expr() {
     assert_eq!(
         result.output().unwrap(),
         &Expr::StructField(
-            Box::new(Expr::Call(Box::new(Expr::Identifier("foo")), vec![])),
-            "bar"
+            Box::new(Expr::Call(Box::new(Expr::Identifier("foo".into())), vec![])),
+            "bar".into()
         )
     );
 }
@@ -460,7 +475,7 @@ fn tuple_access_expr() {
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
     assert_eq!(
         result.output().unwrap(),
-        &Expr::TupleField(Box::new(Expr::Identifier("foo")), 0)
+        &Expr::TupleField(Box::new(Expr::Identifier("foo".into())), 0)
     );
 
     let input = "foo.0.1";
@@ -469,7 +484,10 @@ fn tuple_access_expr() {
     assert_eq!(
         result.output().unwrap(),
         &Expr::TupleField(
-            Box::new(Expr::TupleField(Box::new(Expr::Identifier("foo")), 0)),
+            Box::new(Expr::TupleField(
+                Box::new(Expr::Identifier("foo".into())),
+                0
+            )),
             1
         )
     );
@@ -480,7 +498,7 @@ fn tuple_access_expr() {
     assert_eq!(
         result.output().unwrap(),
         &Expr::TupleField(
-            Box::new(Expr::Call(Box::new(Expr::Identifier("foo")), vec![])),
+            Box::new(Expr::Call(Box::new(Expr::Identifier("foo".into())), vec![])),
             0
         )
     );
@@ -535,10 +553,10 @@ fn parse_struct_init() {
         result.output().unwrap(),
         &Expr::Literal(Literal::Struct(
             TypePath {
-                name: "Foo",
+                name: "Foo".into(),
                 path: None
             },
-            BTreeMap::from_iter([("bar", Expr::Literal(Literal::Integer(42)))])
+            BTreeMap::from_iter([("bar".into(), Expr::Literal(Literal::Integer(42)))])
         ))
     );
 
@@ -549,10 +567,10 @@ fn parse_struct_init() {
         result.output().unwrap(),
         &Expr::Literal(Literal::Struct(
             TypePath {
-                name: "Foo",
+                name: "Foo".into(),
                 path: None
             },
-            BTreeMap::from_iter([("bar", Expr::Literal(Literal::Integer(42)))])
+            BTreeMap::from_iter([("bar".into(), Expr::Literal(Literal::Integer(42)))])
         ))
     );
 
@@ -563,12 +581,12 @@ fn parse_struct_init() {
         result.output().unwrap(),
         &Expr::Literal(Literal::Struct(
             TypePath {
-                name: "Foo",
+                name: "Foo".into(),
                 path: None
             },
             BTreeMap::from_iter([
-                ("bar", Expr::Literal(Literal::Integer(42))),
-                ("baz", Expr::Literal(Literal::Float(3.14)))
+                ("bar".into(), Expr::Literal(Literal::Integer(42))),
+                ("baz".into(), Expr::Literal(Literal::Float(3.14)))
             ])
         ))
     );
@@ -582,7 +600,7 @@ fn if_expr() {
     assert_eq!(
         result.output().unwrap(),
         &Expr::If {
-            cond: Box::new(Expr::Identifier("foo")),
+            cond: Box::new(Expr::Identifier("foo".into())),
             body: Box::new(Expr::Block {
                 body: vec![],
                 terminator: Some(Box::new(Expr::Literal(Literal::Integer(42))))
@@ -597,7 +615,7 @@ fn if_expr() {
     assert_eq!(
         result.output().unwrap(),
         &Expr::If {
-            cond: Box::new(Expr::Identifier("foo")),
+            cond: Box::new(Expr::Identifier("foo".into())),
             body: Box::new(Expr::Block {
                 body: vec![],
                 terminator: Some(Box::new(Expr::Literal(Literal::Integer(42))))
@@ -615,13 +633,13 @@ fn if_expr() {
     assert_eq!(
         result.output().unwrap(),
         &Expr::If {
-            cond: Box::new(Expr::Identifier("foo")),
+            cond: Box::new(Expr::Identifier("foo".into())),
             body: Box::new(Expr::Block {
                 body: vec![],
                 terminator: Some(Box::new(Expr::Literal(Literal::Integer(42))))
             }),
             alternate: Some(Box::new(Expr::If {
-                cond: Box::new(Expr::Identifier("bar")),
+                cond: Box::new(Expr::Identifier("bar".into())),
                 body: Box::new(Expr::Block {
                     body: vec![],
                     terminator: Some(Box::new(Expr::Literal(Literal::Float(3.14))))
@@ -643,7 +661,7 @@ fn match_expr() {
     assert_eq!(
         result.output().unwrap(),
         &Expr::Match {
-            value: Box::new(Expr::Identifier("foo")),
+            value: Box::new(Expr::Identifier("foo".into())),
             arms: vec![crane::expr::MatchArm {
                 pattern: Expr::Literal(Literal::Integer(42)),
                 body: Expr::Literal(Literal::Float(3.14))
@@ -659,7 +677,7 @@ fn tuple_access() {
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
     assert_eq!(
         result.output().unwrap(),
-        &Expr::TupleField(Box::new(Expr::Identifier("foo")), 0)
+        &Expr::TupleField(Box::new(Expr::Identifier("foo".into())), 0)
     );
 
     // chained
@@ -669,7 +687,10 @@ fn tuple_access() {
     assert_eq!(
         *result.output().unwrap(),
         Expr::TupleField(
-            Box::new(Expr::TupleField(Box::new(Expr::Identifier("foo")), 0)),
+            Box::new(Expr::TupleField(
+                Box::new(Expr::Identifier("foo".into())),
+                0
+            )),
             1
         )
     );
@@ -684,7 +705,7 @@ fn index_and_call_orders() {
         result.output().unwrap(),
         &Expr::Call(
             Box::new(Expr::Index(
-                Box::new(Expr::Identifier("foo")),
+                Box::new(Expr::Identifier("foo".into())),
                 Box::new(Expr::Literal(Literal::Integer(42)))
             )),
             vec![Expr::Literal(Literal::Float(3.14))]
@@ -698,7 +719,7 @@ fn index_and_call_orders() {
         result.output().unwrap(),
         &Expr::Index(
             Box::new(Expr::Call(
-                Box::new(Expr::Identifier("foo")),
+                Box::new(Expr::Identifier("foo".into())),
                 vec![Expr::Literal(Literal::Integer(42))]
             )),
             Box::new(Expr::Literal(Literal::Float(3.14)))
@@ -712,7 +733,7 @@ fn index_and_call_orders() {
         result.output().unwrap(),
         &Expr::Call(
             Box::new(Expr::Call(
-                Box::new(Expr::Identifier("foo")),
+                Box::new(Expr::Identifier("foo".into())),
                 vec![Expr::Literal(Literal::Integer(42))]
             )),
             vec![Expr::Literal(Literal::Float(3.14))]
@@ -729,7 +750,7 @@ fn index_and_call_orders() {
         Expr::Call(
             Box::new(Expr::Index(
                 Box::new(Expr::Index(
-                    Box::new(Expr::Identifier("foo")),
+                    Box::new(Expr::Identifier("foo".into())),
                     Box::new(Expr::Literal(Literal::Integer(42)))
                 )),
                 Box::new(Expr::Literal(Literal::Float(3.14)))
@@ -746,7 +767,10 @@ fn index_and_call_orders() {
         *result.output().unwrap(),
         Expr::Call(
             Box::new(Expr::Index(
-                Box::new(Expr::StructField(Box::new(Expr::Identifier("foo")), "bar")),
+                Box::new(Expr::StructField(
+                    Box::new(Expr::Identifier("foo".into())),
+                    "bar".into()
+                )),
                 Box::new(Expr::Literal(Literal::Integer(42)))
             )),
             vec![Expr::Literal(Literal::Float(3.14))]
@@ -760,7 +784,10 @@ fn index_and_call_orders() {
         *result.output().unwrap(),
         Expr::Index(
             Box::new(Expr::Call(
-                Box::new(Expr::StructField(Box::new(Expr::Identifier("foo")), "bar")),
+                Box::new(Expr::StructField(
+                    Box::new(Expr::Identifier("foo".into())),
+                    "bar".into()
+                )),
                 vec![Expr::Literal(Literal::Integer(42))]
             )),
             Box::new(Expr::Literal(Literal::Float(3.14)))
@@ -775,8 +802,11 @@ fn index_and_call_orders() {
         Expr::Index(
             Box::new(Expr::Call(
                 Box::new(Expr::StructField(
-                    Box::new(Expr::TupleField(Box::new(Expr::Identifier("foo")), 0)),
-                    "bar"
+                    Box::new(Expr::TupleField(
+                        Box::new(Expr::Identifier("foo".into())),
+                        0
+                    )),
+                    "bar".into()
                 )),
                 vec![Expr::Literal(Literal::Integer(42))]
             )),
@@ -791,7 +821,10 @@ fn index_and_call_orders() {
         *result.output().unwrap(),
         Expr::Call(
             Box::new(Expr::Index(
-                Box::new(Expr::StructField(Box::new(Expr::Identifier("foo")), "bar")),
+                Box::new(Expr::StructField(
+                    Box::new(Expr::Identifier("foo".into())),
+                    "bar".into()
+                )),
                 Box::new(Expr::Literal(Literal::Integer(42)))
             )),
             vec![Expr::Literal(Literal::Float(3.14))]
@@ -807,7 +840,7 @@ fn index_and_call_orders() {
         Expr::Call(
             Box::new(Expr::Index(
                 Box::new(Expr::Index(
-                    Box::new(Expr::Identifier("foo")),
+                    Box::new(Expr::Identifier("foo".into())),
                     Box::new(Expr::Range(
                         Some(Box::new(Expr::Literal(Literal::Integer(42)))),
                         None
@@ -827,7 +860,7 @@ fn index_and_call_orders() {
         Expr::Call(
             Box::new(Expr::Index(
                 Box::new(Expr::Index(
-                    Box::new(Expr::Identifier("foo")),
+                    Box::new(Expr::Identifier("foo".into())),
                     Box::new(Expr::Range(
                         None,
                         Some(Box::new(Expr::Literal(Literal::Integer(42)))),
@@ -847,7 +880,7 @@ fn index_and_call_orders() {
         Expr::Call(
             Box::new(Expr::Index(
                 Box::new(Expr::Index(
-                    Box::new(Expr::Identifier("foo")),
+                    Box::new(Expr::Identifier("foo".into())),
                     Box::new(Expr::Range(None, None))
                 )),
                 Box::new(Expr::Literal(Literal::Float(3.14)))
@@ -875,31 +908,31 @@ fn small_program() {
         &crate::Expr::Block {
             body: vec![
                 Stmt::Expression(Expr::Let {
-                    pattern: Box::new(Expr::Identifier("foo")),
+                    pattern: Box::new(Expr::Identifier("foo".into())),
                     ty: None,
                     value: Some(Box::new(Expr::Literal(Literal::Integer(42)))),
                 }),
                 Stmt::Expression(Expr::Let {
-                    pattern: Box::new(Expr::Identifier("bar")),
+                    pattern: Box::new(Expr::Identifier("bar".into())),
                     ty: None,
                     value: Some(Box::new(Expr::Literal(Literal::Float(3.14)))),
                 }),
                 Stmt::Assignment(
-                    Expr::Identifier("foo"),
+                    Expr::Identifier("foo".into()),
                     Expr::Call(
-                        Box::new(Expr::Identifier("floor")),
-                        vec![Expr::Identifier("bar")]
+                        Box::new(Expr::Identifier("floor".into())),
+                        vec![Expr::Identifier("bar".into())]
                     )
                 ),
                 Stmt::Expression(Expr::Call(
                     Box::new(Expr::StructField(
-                        Box::new(Expr::Identifier("console")),
-                        "log"
+                        Box::new(Expr::Identifier("console".into())),
+                        "log".into()
                     )),
                     vec![Expr::Binary(
-                        Box::new(Expr::Identifier("foo")),
+                        Box::new(Expr::Identifier("foo".into())),
                         BinaryOp::Add,
-                        Box::new(Expr::Identifier("bar"))
+                        Box::new(Expr::Identifier("bar".into()))
                     ),]
                 )),
             ],
@@ -923,13 +956,13 @@ if let foo = 42 {
         *result.output().unwrap(),
         Expr::If {
             cond: Box::new(Expr::Let {
-                pattern: Box::new(Expr::Identifier("foo")),
+                pattern: Box::new(Expr::Identifier("foo".into())),
                 ty: None,
                 value: Some(Box::new(Expr::Literal(Literal::Integer(42)))),
             }),
             body: Box::new(Expr::Block {
                 body: vec![],
-                terminator: Some(Box::new(Expr::Identifier("foo")))
+                terminator: Some(Box::new(Expr::Identifier("foo".into())))
             }),
             alternate: Some(Box::new(Expr::Block {
                 body: vec![],
@@ -946,7 +979,7 @@ fn static_member_access() {
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
     assert_eq!(
         *result.output().unwrap(),
-        Expr::StaticAccess(Box::new(Expr::Identifier("foo")), "bar")
+        Expr::StaticAccess(Box::new(Expr::Identifier("foo".into())), "bar".into())
     );
 
     let input = "foo::bar::baz";
@@ -955,8 +988,11 @@ fn static_member_access() {
     assert_eq!(
         *result.output().unwrap(),
         Expr::StaticAccess(
-            Box::new(Expr::StaticAccess(Box::new(Expr::Identifier("foo")), "bar")),
-            "baz"
+            Box::new(Expr::StaticAccess(
+                Box::new(Expr::Identifier("foo".into())),
+                "bar".into()
+            )),
+            "baz".into()
         )
     );
 }
@@ -969,7 +1005,7 @@ fn declarations() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::Function {
-            name: "foo",
+            name: "foo".into(),
             generic_params: None,
             params: vec![],
             ret: None,
@@ -986,11 +1022,11 @@ fn declarations() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::Function {
-            name: "foo",
+            name: "foo".into(),
             generic_params: None,
             params: vec![],
             ret: Some(TypeSignature::Named(TypePath {
-                name: "int",
+                name: "int".into(),
                 path: None
             })),
             body: Expr::Block {
@@ -1006,9 +1042,9 @@ fn declarations() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::Constant {
-            name: "foo",
+            name: "foo".into(),
             ty: TypeSignature::Named(TypePath {
-                name: "int",
+                name: "int".into(),
                 path: None
             }),
             value: Expr::Literal(Literal::Integer(42)),
@@ -1021,9 +1057,9 @@ fn declarations() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::Static {
-            name: "foo",
+            name: "foo".into(),
             ty: TypeSignature::Named(TypePath {
-                name: "int",
+                name: "int".into(),
                 path: None
             }),
             value: Expr::Literal(Literal::Integer(42)),
@@ -1036,7 +1072,7 @@ fn declarations() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::Struct {
-            name: "Foo",
+            name: "Foo".into(),
             generic_params: None,
             value: Variant::Struct(BTreeMap::new()),
         }
@@ -1056,20 +1092,20 @@ fn struct_decl() {
     assert_eq!(
         result.output().unwrap(),
         &Declaration::Struct {
-            name: "Foo",
+            name: "Foo".into(),
             generic_params: None,
             value: Variant::Struct(BTreeMap::from_iter([
                 (
-                    "bar",
+                    "bar".into(),
                     TypeSignature::Named(TypePath {
-                        name: "int",
+                        name: "int".into(),
                         path: None
                     })
                 ),
                 (
-                    "baz",
+                    "baz".into(),
                     TypeSignature::Named(TypePath {
-                        name: "bool",
+                        name: "bool".into(),
                         path: None
                     })
                 )
@@ -1084,7 +1120,7 @@ fn struct_decl() {
         result.output().unwrap(),
         &Declaration::Struct {
             generic_params: None,
-            name: "Foo",
+            name: "Foo".into(),
             value: Variant::Unit
         }
     );
@@ -1096,7 +1132,7 @@ fn struct_decl() {
         result.output().unwrap(),
         &Declaration::Struct {
             generic_params: None,
-            name: "Foo",
+            name: "Foo".into(),
             value: Variant::Struct(BTreeMap::new())
         }
     );
@@ -1107,15 +1143,15 @@ fn struct_decl() {
     assert_eq!(
         result.output().unwrap(),
         &Declaration::Struct {
-            name: "Foo",
+            name: "Foo".into(),
             generic_params: None,
             value: Variant::Tuple(vec![
                 TypeSignature::Named(TypePath {
-                    name: "int",
+                    name: "int".into(),
                     path: None
                 }),
                 TypeSignature::Named(TypePath {
-                    name: "bool",
+                    name: "bool".into(),
                     path: None
                 })
             ])
@@ -1135,9 +1171,9 @@ fn enum_decl() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::Enum {
-            name: "Foo",
+            name: "Foo".into(),
             generic_params: None,
-            variants: vec![("Bar", Variant::Unit), ("Baz", Variant::Unit),]
+            variants: vec![("Bar".into(), Variant::Unit), ("Baz".into(), Variant::Unit),]
         }
     );
 
@@ -1152,25 +1188,25 @@ fn enum_decl() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::Enum {
-            name: "Foo",
+            name: "Foo".into(),
             generic_params: None,
             variants: vec![
                 (
-                    "Bar",
+                    "Bar".into(),
                     Variant::Tuple(vec![TypeSignature::Named(TypePath {
-                        name: "int",
+                        name: "int".into(),
                         path: None
                     })])
                 ),
                 (
-                    "Baz",
+                    "Baz".into(),
                     Variant::Tuple(vec![
                         TypeSignature::Named(TypePath {
-                            name: "int",
+                            name: "int".into(),
                             path: None
                         }),
                         TypeSignature::Named(TypePath {
-                            name: "bool",
+                            name: "bool".into(),
                             path: None
                         })
                     ])
@@ -1189,31 +1225,31 @@ fn enum_decl() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::Enum {
-            name: "Foo",
+            name: "Foo".into(),
             generic_params: None,
             variants: vec![
-                ("Foo", Variant::Unit),
+                ("Foo".into(), Variant::Unit),
                 (
-                    "Bar",
+                    "Bar".into(),
                     Variant::Tuple(vec![TypeSignature::Named(TypePath {
-                        name: "int",
+                        name: "int".into(),
                         path: None
                     })])
                 ),
                 (
-                    "Baz",
+                    "Baz".into(),
                     Variant::Struct(BTreeMap::from_iter([
                         (
-                            "baz",
+                            "baz".into(),
                             TypeSignature::Named(TypePath {
-                                name: "int",
+                                name: "int".into(),
                                 path: None
                             })
                         ),
                         (
-                            "qux",
+                            "qux".into(),
                             TypeSignature::Named(TypePath {
-                                name: "bool",
+                                name: "bool".into(),
                                 path: None
                             })
                         )
@@ -1234,31 +1270,31 @@ fn enum_decl() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::Enum {
-            name: "Foo",
-            generic_params: Some(vec!["T"]),
+            name: "Foo".into(),
+            generic_params: Some(vec!["T".into()]),
             variants: vec![
-                ("Foo", Variant::Unit),
+                ("Foo".into(), Variant::Unit),
                 (
-                    "Bar",
+                    "Bar".into(),
                     Variant::Tuple(vec![TypeSignature::Named(TypePath {
-                        name: "T",
+                        name: "T".into(),
                         path: None
                     })])
                 ),
                 (
-                    "Baz",
+                    "Baz".into(),
                     Variant::Struct(BTreeMap::from_iter([
                         (
-                            "baz",
+                            "baz".into(),
                             TypeSignature::Named(TypePath {
-                                name: "T",
+                                name: "T".into(),
                                 path: None
                             })
                         ),
                         (
-                            "qux",
+                            "qux".into(),
                             TypeSignature::Named(TypePath {
-                                name: "bool",
+                                name: "bool".into(),
                                 path: None
                             })
                         )
@@ -1277,9 +1313,9 @@ fn const_decl() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::Constant {
-            name: "Foo",
+            name: "Foo".into(),
             ty: TypeSignature::Named(TypePath {
-                name: "int",
+                name: "int".into(),
                 path: None
             }),
             value: Expr::Literal(Literal::Integer(1))
@@ -1292,27 +1328,27 @@ fn const_decl() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::Constant {
-            name: "FOO",
+            name: "FOO".into(),
             ty: TypeSignature::GenericApplication(
                 TypePath {
-                    name: "HashMap",
+                    name: "HashMap".into(),
                     path: None
                 },
                 vec![
                     TypeSignature::Named(TypePath {
-                        name: "Bar",
+                        name: "Bar".into(),
                         path: None
                     }),
                     TypeSignature::Named(TypePath {
-                        name: "Baz",
+                        name: "Baz".into(),
                         path: None
                     }),
                 ]
             ),
             value: Expr::Call(
                 Box::new(Expr::StaticAccess(
-                    Box::new(Expr::Identifier("HashMap")),
-                    "new"
+                    Box::new(Expr::Identifier("HashMap".into())),
+                    "new".into()
                 )),
                 vec![]
             )
@@ -1328,11 +1364,11 @@ fn function_decl() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::Function {
-            name: "foo",
+            name: "foo".into(),
             generic_params: None,
             params: vec![],
             ret: Some(TypeSignature::Named(TypePath {
-                name: "int",
+                name: "int".into(),
                 path: None
             })),
             body: Expr::Block {
@@ -1348,22 +1384,22 @@ fn function_decl() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::Function {
-            name: "foo",
+            name: "foo".into(),
             generic_params: None,
             params: vec![(
-                "bar",
+                "bar".into(),
                 TypeSignature::Named(TypePath {
-                    name: "int",
+                    name: "int".into(),
                     path: None
                 })
             )],
             ret: Some(TypeSignature::Named(TypePath {
-                name: "int",
+                name: "int".into(),
                 path: None
             })),
             body: Expr::Block {
                 body: vec![],
-                terminator: Some(Box::new(Expr::Identifier("bar")))
+                terminator: Some(Box::new(Expr::Identifier("bar".into())))
             }
         }
     );
@@ -1375,22 +1411,22 @@ fn function_decl() {
     assert_eq!(
         result.output().unwrap(),
         &Declaration::Function {
-            name: "foo",
-            generic_params: Some(vec!["T"]),
+            name: "foo".into(),
+            generic_params: Some(vec!["T".into()]),
             params: vec![(
-                "bar",
+                "bar".into(),
                 TypeSignature::Named(TypePath {
-                    name: "T",
+                    name: "T".into(),
                     path: None
                 })
             )],
             ret: Some(TypeSignature::Named(TypePath {
-                name: "T",
+                name: "T".into(),
                 path: None
             })),
             body: Expr::Block {
                 body: vec![],
-                terminator: Some(Box::new(Expr::Identifier("bar")))
+                terminator: Some(Box::new(Expr::Identifier("bar".into())))
             }
         }
     );
@@ -1406,20 +1442,20 @@ fn function_decl() {
     assert_eq!(
         result.output().unwrap(),
         &Declaration::Function {
-            name: "foo",
+            name: "foo".into(),
             generic_params: None,
             params: vec![],
             ret: Some(TypeSignature::Named(TypePath {
-                name: "int",
+                name: "int".into(),
                 path: None
             })),
             body: Expr::Block {
                 body: vec![Stmt::Expression(Expr::Let {
-                    pattern: Box::new(Expr::Identifier("bar")),
+                    pattern: Box::new(Expr::Identifier("bar".into())),
                     ty: None,
                     value: Some(Box::new(Expr::Literal(Literal::Integer(42)))),
                 }),],
-                terminator: Some(Box::new(Expr::Identifier("bar")))
+                terminator: Some(Box::new(Expr::Identifier("bar".into())))
             }
         }
     );
@@ -1433,10 +1469,10 @@ fn type_alias_decl() {
     assert_eq!(
         result.output().unwrap(),
         &Declaration::TypeAlias {
-            name: "Foo",
+            name: "Foo".into(),
             generic_params: None,
             ty: TypeSignature::Named(TypePath {
-                name: "int",
+                name: "int".into(),
                 path: None
             })
         }
@@ -1448,20 +1484,20 @@ fn type_alias_decl() {
     assert_eq!(
         *result.output().unwrap(),
         Declaration::TypeAlias {
-            name: "Foo",
-            generic_params: Some(vec!["T"]),
+            name: "Foo".into(),
+            generic_params: Some(vec!["T".into()]),
             ty: TypeSignature::GenericApplication(
                 TypePath {
-                    name: "HashMap",
+                    name: "HashMap".into(),
                     path: None
                 },
                 vec![
                     TypeSignature::Named(TypePath {
-                        name: "T",
+                        name: "T".into(),
                         path: None
                     }),
                     TypeSignature::Named(TypePath {
-                        name: "int",
+                        name: "int".into(),
                         path: None
                     })
                 ]
@@ -1562,10 +1598,10 @@ fn parse_import() {
         Import {
             alias: None,
             path: TypePath {
-                name: "HashMap",
+                name: "HashMap".into(),
                 path: Some(vec![
-                    TypePathSegment::Ident("std"),
-                    TypePathSegment::Ident("collections"),
+                    TypePathSegment::Ident("std".into()),
+                    TypePathSegment::Ident("collections".into()),
                 ])
             },
         }
@@ -1577,12 +1613,12 @@ fn parse_import() {
     assert_eq!(
         *result.output().unwrap(),
         Import {
-            alias: Some("Map"),
+            alias: Some("Map".into()),
             path: TypePath {
-                name: "HashMap",
+                name: "HashMap".into(),
                 path: Some(vec![
-                    TypePathSegment::Ident("std"),
-                    TypePathSegment::Ident("collections"),
+                    TypePathSegment::Ident("std".into()),
+                    TypePathSegment::Ident("collections".into()),
                 ])
             },
         }
@@ -1604,12 +1640,12 @@ fn use_in_statement_pos() {
             cond: Box::new(Expr::Literal(Literal::Boolean(true))),
             body: Box::new(Expr::Block {
                 body: vec![Stmt::Use(Import {
-                    alias: Some("Map"),
+                    alias: Some("Map".into()),
                     path: TypePath {
-                        name: "HashMap",
+                        name: "HashMap".into(),
                         path: Some(vec![
-                            TypePathSegment::Ident("std"),
-                            TypePathSegment::Ident("collections"),
+                            TypePathSegment::Ident("std".into()),
+                            TypePathSegment::Ident("collections".into()),
                         ])
                     },
                 })],
@@ -1637,14 +1673,17 @@ fn multiline_method_chain() {
                 Box::new(Expr::Call(
                     Box::new(Expr::StructField(
                         Box::new(Expr::Call(
-                            Box::new(Expr::StructField(Box::new(Expr::Identifier("foo")), "bar")),
+                            Box::new(Expr::StructField(
+                                Box::new(Expr::Identifier("foo".into())),
+                                "bar".into()
+                            )),
                             vec![]
                         )),
-                        "baz"
+                        "baz".into()
                     )),
                     vec![]
                 )),
-                "qux"
+                "qux".into()
             )),
             vec![]
         )

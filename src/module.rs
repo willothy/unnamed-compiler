@@ -1,11 +1,15 @@
-use std::collections::BTreeMap;
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashMap},
+    path::PathBuf,
+    rc::Rc,
+};
 
 use chumsky::{
     error::Rich,
-    extra,
-    primitive::{choice, just, todo},
+    primitive::{choice, just},
     text::{digits, ident, keyword},
-    IterParser as _, Parser,
+    IterParser as _, ParseResult, Parser,
 };
 
 use crate::{
@@ -16,19 +20,19 @@ use crate::{
 
 /// A top-level import, e.g. `use package::path::to::type;`
 #[derive(Debug, PartialEq, Eq)]
-pub struct Import<'a> {
-    pub path: TypePath<'a>,
-    pub alias: Option<&'a str>,
+pub struct Import {
+    pub path: TypePath,
+    pub alias: Option<Rc<str>>,
 }
 
-impl<'a> NodeParser<'a, Self> for Import<'a> {
+impl<'a> NodeParser<'a, Self> for Import {
     fn parser() -> impl crate::Parser<'a, Self> {
         keyword("use")
             .ignore_then(TypePath::parser().padded())
             .then(
                 keyword("as")
                     .padded()
-                    .ignore_then(ident())
+                    .ignore_then(ident().map(Rc::<str>::from))
                     .padded()
                     .or_not(),
             )
@@ -37,140 +41,200 @@ impl<'a> NodeParser<'a, Self> for Import<'a> {
 }
 
 /// A module at AST level, with no type information or import resolution.
-pub struct Module<'a> {
-    pub name: &'a str,
-    pub declarations: BTreeMap<&'a str, Declaration<'a>>,
-    pub imports: Vec<Import<'a>>,
+#[derive(Debug)]
+pub struct Module {
+    pub name: Rc<str>,
+    pub source: PathBuf,
+    pub declarations: BTreeMap<Rc<str>, Declaration>,
+    pub imports: Vec<Import>,
+    pub submodules: BTreeMap<Rc<str>, Module>,
+    // TODO: abstract over file cache to fetch files
+    file_cache: Rc<RefCell<HashMap<PathBuf, Rc<str>>>>,
 }
 
-impl<'a> Default for Module<'a> {
-    fn default() -> Self {
-        Self::new("main")
+impl PartialEq for Module {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source
     }
 }
 
-impl<'a> Module<'a> {
-    pub fn new(name: &'a str) -> Self {
+impl<'a> Default for Module {
+    fn default() -> Self {
+        Self::new("main", PathBuf::new(), None)
+    }
+}
+
+impl Module {
+    pub fn new(
+        name: &str,
+        source: PathBuf,
+        cache: Option<Rc<RefCell<HashMap<PathBuf, Rc<str>>>>>,
+    ) -> Self {
         Self {
-            name,
-            declarations: BTreeMap::new(),
+            name: name.into(),
+            source,
             imports: Vec::new(),
+            declarations: BTreeMap::new(),
+            submodules: BTreeMap::new(),
+            file_cache: cache.unwrap_or_default(),
         }
     }
 
-    pub fn name(&self) -> &'a str {
-        self.name
+    pub fn name(&self) -> &str {
+        self.name.as_ref()
     }
 
-    pub fn declarations(&self) -> impl Iterator<Item = &Declaration<'a>> {
+    pub fn declarations(&self) -> impl Iterator<Item = &Declaration> {
         self.declarations.values()
     }
 
-    pub fn declarations_mut(&mut self) -> impl Iterator<Item = &mut Declaration<'a>> {
+    pub fn declarations_mut(&mut self) -> impl Iterator<Item = &mut Declaration> {
         self.declarations.values_mut()
     }
 
-    pub fn declaration(&self, name: &str) -> Option<&Declaration<'a>> {
+    pub fn declaration(&self, name: &str) -> Option<&Declaration> {
         self.declarations.get(name)
     }
 
-    pub fn declaration_mut(&mut self, name: &str) -> Option<&mut Declaration<'a>> {
+    pub fn declaration_mut(&mut self, name: &str) -> Option<&mut Declaration> {
         self.declarations.get_mut(name)
     }
 
-    pub fn insert(&mut self, decl: Declaration<'a>) {
-        self.declarations.insert(decl.name(), decl);
+    pub fn insert(&mut self, decl: Declaration) {
+        self.declarations.insert(decl.name().into(), decl);
     }
 
-    pub fn import(&mut self, path: TypePath<'a>, alias: Option<&'a str>) {
+    pub fn import(&mut self, path: TypePath, alias: Option<Rc<str>>) {
         self.imports.push(Import { path, alias });
     }
 
-    pub fn add_import(&mut self, import: Import<'a>) {
+    pub fn add_import(&mut self, import: Import) {
         self.imports.push(import);
     }
 
-    pub fn add_imports(&mut self, imports: Vec<Import<'a>>) {
+    pub fn add_imports(&mut self, imports: Vec<Import>) {
         self.imports.extend(imports);
+    }
+
+    pub fn add_submodule(&mut self, module: Module) {
+        self.submodules.insert(module.name().into(), module);
+    }
+
+    pub fn submodule(&self, name: &str) -> Option<&Module> {
+        self.submodules.get(name)
+    }
+
+    pub fn submodule_mut(&mut self, name: &str) -> Option<&mut Module> {
+        self.submodules.get_mut(name)
+    }
+
+    pub fn parse_submodules(&mut self) {
+        for (_, module) in self.submodules.iter_mut() {
+            let input = self.file_cache.borrow();
+            // TODO: Handle submodules properly with subdirs and files
+            let input = input.get(&module.source).unwrap().as_ref();
+            module.parse(input);
+        }
+    }
+
+    pub fn parse<'a>(&mut self, input: &'a str) -> ParseResult<(), Rich<'a, char>> {
+        Self::parser()
+            .or_not()
+            .padded()
+            .map(|_| ())
+            .parse_with_state(input, self)
     }
 }
 
-impl<'a> NodeParser<'a, Self> for Module<'a> {
-    fn parser(
-    ) -> impl Parser<'a, &'a str, Self, extra::Full<Rich<'a, char>, Module<'a>, ()>> + Clone + 'a
-    {
-        // let decl = Declaration::parser();
-        //
-        // let r#use = Import::parser();
-        //
-        // decl.map_with(|d, e| {
-        //     state.declarations.insert(d.name(), d);
-        //     // todo
-        // })
-        todo()
+impl<'a> NodeParser<'a, ()> for Module {
+    fn parser() -> impl crate::Parser<'a, ()> {
+        let decl = Declaration::parser();
+
+        let r#use = Import::parser();
+
+        decl.map_with(|d, e| match d {
+            Declaration::Module { name } => {
+                let state = e.state();
+                // TODO: Handle submodules properly with subdirs and files
+                let src = state.source.join(name.as_ref()).with_extension("cr");
+                state.submodules.insert(
+                    Rc::clone(&name),
+                    Module::new(name.as_ref(), src, Some(Rc::clone(&state.file_cache))),
+                );
+            }
+            _ => {
+                e.state().declarations.insert(d.name().into(), d);
+            }
+        })
+        .or(r#use.map_with(|i, e| {
+            e.state().imports.push(i);
+        }))
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Variant<'a> {
+pub enum Variant {
     /// A unit variant with no attached data, e.g. `UnitVariant`
     Unit,
     /// A tuple-style variant, e.g. `TupleVariant(int, int)`
-    Tuple(Vec<TypeSignature<'a>>),
+    Tuple(Vec<TypeSignature>),
     /// A struct-style variant, e.g. `StructVariant { field: int }`
-    Struct(BTreeMap<&'a str, TypeSignature<'a>>),
+    Struct(BTreeMap<Rc<str>, TypeSignature>),
     /// A variant with a single value, e.g. `CStyleVariant = 42`
     Integer(i64),
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Declaration<'a> {
+pub enum Declaration {
     Function {
-        name: &'a str,
-        params: Vec<(&'a str, TypeSignature<'a>)>,
-        generic_params: Option<Vec<&'a str>>,
-        ret: Option<TypeSignature<'a>>,
-        body: Expr<'a>,
+        name: Rc<str>,
+        params: Vec<(Rc<str>, TypeSignature)>,
+        generic_params: Option<Vec<Rc<str>>>,
+        ret: Option<TypeSignature>,
+        body: Expr,
     },
     Struct {
-        name: &'a str,
-        generic_params: Option<Vec<&'a str>>,
-        value: Variant<'a>,
+        name: Rc<str>,
+        generic_params: Option<Vec<Rc<str>>>,
+        value: Variant,
     },
     Enum {
-        name: &'a str,
-        generic_params: Option<Vec<&'a str>>,
-        variants: Vec<(&'a str, Variant<'a>)>,
+        name: Rc<str>,
+        generic_params: Option<Vec<Rc<str>>>,
+        variants: Vec<(Rc<str>, Variant)>,
     },
     Union {
-        name: &'a str,
-        generic_params: Option<Vec<&'a str>>,
-        variants: BTreeMap<&'a str, TypeSignature<'a>>,
+        name: Rc<str>,
+        generic_params: Option<Vec<Rc<str>>>,
+        variants: BTreeMap<Rc<str>, TypeSignature>,
     },
     Static {
-        name: &'a str,
-        ty: TypeSignature<'a>,
-        value: Expr<'a>,
+        name: Rc<str>,
+        ty: TypeSignature,
+        value: Expr,
     },
     Constant {
-        name: &'a str,
-        ty: TypeSignature<'a>,
-        value: Expr<'a>,
+        name: Rc<str>,
+        ty: TypeSignature,
+        value: Expr,
     },
     /// A type alias, e.g. `type Foo<T> = Vec<T>;`
     TypeAlias {
-        name: &'a str,
+        name: Rc<str>,
         /// The generic parameters of the type alias, if any.
         ///
         /// The `T` in `type Foo<T> = Vec<T>;` is a generic parameter.
-        generic_params: Option<Vec<&'a str>>,
+        generic_params: Option<Vec<Rc<str>>>,
         /// The type the alias points to. Unresolved at this stage.
-        ty: TypeSignature<'a>,
+        ty: TypeSignature,
+    },
+    Module {
+        name: Rc<str>,
     },
 }
 
-impl<'a> Declaration<'a> {
-    pub fn name(&self) -> &'a str {
+impl Declaration {
+    pub fn name(&self) -> &str {
         match self {
             Declaration::Function { name, .. }
             | Declaration::Struct { name, .. }
@@ -179,16 +243,15 @@ impl<'a> Declaration<'a> {
             | Declaration::Static { name, .. }
             | Declaration::Constant { name, .. }
             | Declaration::TypeAlias { name, .. } => name,
+            Declaration::Module { name } => name,
         }
     }
 }
 
-impl<'a> NodeParser<'a, Self> for Declaration<'a> {
-    fn parser(
-    ) -> impl chumsky::prelude::Parser<'a, &'a str, Self, extra::Full<Rich<'a, char>, Module<'a>, ()>>
-           + Clone
-           + 'a {
+impl<'a> NodeParser<'a, Self> for Declaration {
+    fn parser() -> impl crate::Parser<'a, Self> {
         let generic_params = ident()
+            .map(Rc::<str>::from)
             .padded()
             .separated_by(just(",").padded())
             .collect::<Vec<_>>()
@@ -197,9 +260,10 @@ impl<'a> NodeParser<'a, Self> for Declaration<'a> {
             .or_not();
 
         let r#fn = keyword("fn")
-            .ignore_then(ident().padded().then(generic_params))
+            .ignore_then(ident().map(Rc::<str>::from).padded().then(generic_params))
             .then(
                 ident()
+                    .map(Rc::<str>::from)
                     .padded()
                     .then_ignore(just(":").padded())
                     .then(TypeSignature::parser().padded())
@@ -220,6 +284,7 @@ impl<'a> NodeParser<'a, Self> for Declaration<'a> {
             );
 
         let struct_variant = ident()
+            .map(Rc::<str>::from)
             .padded()
             .then_ignore(just(":").padded())
             .then(TypeSignature::parser().padded())
@@ -240,13 +305,17 @@ impl<'a> NodeParser<'a, Self> for Declaration<'a> {
 
         let r#struct = keyword("struct")
             .ignore_then(
-                ident().padded().then(generic_params).then(
-                    struct_variant
-                        .clone()
-                        .or(tuple_variant.clone())
-                        .or_not()
-                        .map(|variant| variant.unwrap_or(Variant::Unit)),
-                ),
+                ident()
+                    .map(Rc::<str>::from)
+                    .padded()
+                    .then(generic_params)
+                    .then(
+                        struct_variant
+                            .clone()
+                            .or(tuple_variant.clone())
+                            .or_not()
+                            .map(|variant| variant.unwrap_or(Variant::Unit)),
+                    ),
             )
             .map(|((name, generic_params), value)| Declaration::Struct {
                 name,
@@ -264,10 +333,11 @@ impl<'a> NodeParser<'a, Self> for Declaration<'a> {
 
         let r#enum = keyword("enum")
             .padded()
-            .ignore_then(ident().padded())
+            .ignore_then(ident().map(Rc::<str>::from).padded())
             .then(generic_params)
             .then(
                 ident()
+                    .map(Rc::<str>::from)
                     .padded()
                     .then(
                         choice((struct_variant, tuple_variant, int_variant))
@@ -287,15 +357,20 @@ impl<'a> NodeParser<'a, Self> for Declaration<'a> {
 
         let r#union = keyword("union")
             .ignore_then(
-                ident().padded().then(generic_params).then(
-                    ident()
-                        .padded()
-                        .then_ignore(just(":").padded())
-                        .then(TypeSignature::parser().padded())
-                        .separated_by(just(",").padded())
-                        .collect::<BTreeMap<_, _>>()
-                        .delimited_by(just("{").padded(), just("}").padded()),
-                ),
+                ident()
+                    .map(Rc::<str>::from)
+                    .padded()
+                    .then(generic_params)
+                    .then(
+                        ident()
+                            .map(Rc::<str>::from)
+                            .padded()
+                            .then_ignore(just(":").padded())
+                            .then(TypeSignature::parser().padded())
+                            .separated_by(just(",").padded())
+                            .collect::<BTreeMap<_, _>>()
+                            .delimited_by(just("{").padded(), just("}").padded()),
+                    ),
             )
             .map(|((name, generic_params), variants)| Declaration::Union {
                 name,
@@ -303,9 +378,14 @@ impl<'a> NodeParser<'a, Self> for Declaration<'a> {
                 variants,
             });
 
+        let r#mod = keyword("mod")
+            .ignore_then(ident().map(Rc::<str>::from).padded())
+            .map(|name| Declaration::Module { name });
+
         let r#static = keyword("static")
             .ignore_then(
                 ident()
+                    .map(Rc::<str>::from)
                     .padded()
                     .then_ignore(just(":").padded())
                     .then(TypeSignature::parser().padded())
@@ -317,6 +397,7 @@ impl<'a> NodeParser<'a, Self> for Declaration<'a> {
         let r#const = keyword("const")
             .ignore_then(
                 ident()
+                    .map(Rc::<str>::from)
                     .padded()
                     .then_ignore(just(":").padded())
                     .then(TypeSignature::parser().padded())
@@ -328,6 +409,7 @@ impl<'a> NodeParser<'a, Self> for Declaration<'a> {
         let r#alias = keyword("type")
             .ignore_then(
                 ident()
+                    .map(Rc::<str>::from)
                     .padded()
                     .then(generic_params)
                     .then_ignore(just("=").padded())
@@ -345,5 +427,6 @@ impl<'a> NodeParser<'a, Self> for Declaration<'a> {
             .or(r#static)
             .or(r#const)
             .or(r#alias)
+            .or(r#mod)
     }
 }

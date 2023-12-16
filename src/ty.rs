@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use chumsky::{
     primitive::{choice, just},
     recursive::recursive,
@@ -8,11 +10,11 @@ use chumsky::{
 use crate::{util::comma_separated, NodeParser};
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum TypePathSegment<'a> {
+pub enum TypePathSegment {
     Package,
     SelfModule,
     SuperModule,
-    Ident(&'a str),
+    Ident(Rc<str>),
 }
 
 /// Represents a type path, e.g. `package::path::to::type`.
@@ -24,15 +26,15 @@ pub enum TypePathSegment<'a> {
 /// [`TypePathSegment::SuperModule`] respectively, and must be resolved to a valid path
 /// if valid or reported as an error during import resolution.
 #[derive(Debug, PartialEq, Eq)]
-pub struct TypePath<'a> {
+pub struct TypePath {
     /// The actual type name.
-    pub name: &'a str,
+    pub name: Rc<str>,
     /// The path to the type, if any, starting with the package name
     /// or `package`, `self` or `super`.
-    pub path: Option<Vec<TypePathSegment<'a>>>,
+    pub path: Option<Vec<TypePathSegment>>,
 }
 
-impl<'a> TypePath<'a> {
+impl TypePath {
     pub fn is_valid(&self) -> bool {
         use TypePathSegment::*;
         let mut package = false;
@@ -56,18 +58,18 @@ impl<'a> TypePath<'a> {
     }
 }
 
-impl<'a> NodeParser<'a, TypePathSegment<'a>> for TypePathSegment<'a> {
+impl<'a> NodeParser<'a, TypePathSegment> for TypePathSegment {
     fn parser() -> impl crate::Parser<'a, Self> {
         ident().map(|s| match s {
             "package" => Self::Package,
             "self" => Self::SelfModule,
             "super" => Self::SuperModule,
-            name => Self::Ident(name),
+            name => Self::Ident(name.into()),
         })
     }
 }
 
-impl<'a> NodeParser<'a, TypePath<'a>> for TypePath<'a> {
+impl<'a> NodeParser<'a, TypePath> for TypePath {
     fn parser() -> impl crate::Parser<'a, Self> {
         TypePathSegment::parser()
             .separated_by(just("::"))
@@ -84,26 +86,29 @@ impl<'a> NodeParser<'a, TypePath<'a>> for TypePath<'a> {
                     path: Some(path),
                 }
             })
-            .or(ident().map(|name| TypePath { name, path: None }))
+            .or(ident().map(|name: &str| TypePath {
+                name: name.into(),
+                path: None,
+            }))
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum TypeSignature<'a> {
+pub enum TypeSignature {
     Unit,
     // A named type, e.g. `package::path::to::type` or `type`
     // This is the only type that can be a generic parameter, so generics will
     // need to be used in resolution of some of these names.
-    Named(TypePath<'a>),
+    Named(TypePath),
     // Struct, enum or union types with generic parameters
-    GenericApplication(TypePath<'a>, Vec<TypeSignature<'a>>),
-    Tuple(Vec<TypeSignature<'a>>),
-    Array(Box<TypeSignature<'a>>),
-    Function(Vec<TypeSignature<'a>>, Box<TypeSignature<'a>>),
-    Reference(Box<TypeSignature<'a>>),
+    GenericApplication(TypePath, Vec<TypeSignature>),
+    Tuple(Vec<TypeSignature>),
+    Array(Box<TypeSignature>),
+    Function(Vec<TypeSignature>, Box<TypeSignature>),
+    Reference(Box<TypeSignature>),
 }
 
-impl<'a> NodeParser<'a, TypeSignature<'a>> for TypeSignature<'a> {
+impl<'a> NodeParser<'a, TypeSignature> for TypeSignature {
     fn parser() -> impl crate::Parser<'a, Self> {
         recursive(|this| {
             let unit = just("()").map(|_| TypeSignature::Unit);
