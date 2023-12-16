@@ -407,7 +407,7 @@ fn parse_call_expr() {
 }
 
 #[test]
-fn test_index_expr() {
+fn index_expr() {
     let input = "foo[42]";
     let result = Expr::parser().parse(input);
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
@@ -454,7 +454,7 @@ fn parse_struct_access_expr() {
 }
 
 #[test]
-fn test_tuple_access_expr() {
+fn tuple_access_expr() {
     let input = "foo.0";
     let result = Expr::parser().parse(input);
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
@@ -676,7 +676,7 @@ fn tuple_access() {
 }
 
 #[test]
-fn test_index_and_call_orders() {
+fn index_and_call_orders() {
     let input = "foo[42](3.14)";
     let result = Expr::parser().parse(input);
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
@@ -800,7 +800,7 @@ fn test_index_and_call_orders() {
 }
 
 #[test]
-fn test_small_program() {
+fn small_program() {
     let input = r#"
 {
     let foo = 42;
@@ -851,7 +851,7 @@ fn test_small_program() {
 }
 
 #[test]
-fn test_if_let() {
+fn if_let() {
     let input = r#"
 if let foo = 42 {
     foo
@@ -882,7 +882,7 @@ if let foo = 42 {
 }
 
 #[test]
-fn test_static_member_access() {
+fn static_member_access() {
     let input = "foo::bar";
     let result = Expr::parser().parse(input);
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
@@ -904,8 +904,7 @@ fn test_static_member_access() {
 }
 
 #[test]
-fn test_declarations() {
-    // top-level declarations
+fn declarations() {
     let input = "fn foo() {}";
     let result = Declaration::parser().parse(input);
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
