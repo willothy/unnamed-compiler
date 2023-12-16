@@ -228,12 +228,24 @@ impl<'a> Expr<'a> {
                     body,
                 });
 
+            let r#use = keyword("use")
+                .ignore_then(TypePath::parser().padded())
+                .then(
+                    keyword("as")
+                        .padded()
+                        .ignore_then(ident())
+                        .padded()
+                        .or_not(),
+                )
+                .map(|(path, alias)| Stmt::Use { path, alias });
+
             let stmt = choice((
-                assignment,
                 r#return,
                 r#break,
                 r#while,
                 r#for,
+                r#use,
+                assignment,
                 expr.clone().map(Stmt::Expression),
             ));
             stmt.separated_by(just(";").padded())

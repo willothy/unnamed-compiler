@@ -93,8 +93,9 @@ impl<'a> NodeParser<'a, TypePath<'a>> for TypePath<'a> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum TypeSignature<'a> {
     Unit,
-    // Struct, enum or union types without generic parameters
-    // Also primitive types - maybe this should be a separate variant?
+    // A named type, e.g. `package::path::to::type` or `type`
+    // This is the only type that can be a generic parameter, so generics will
+    // need to be used in resolution of some of these names.
     Named(TypePath<'a>),
     // Struct, enum or union types with generic parameters
     GenericApplication(TypePath<'a>, Vec<TypeSignature<'a>>),
@@ -123,10 +124,6 @@ impl<'a> NodeParser<'a, TypeSignature<'a>> for TypeSignature<'a> {
                         .boxed(),
                 )
                 .map(|(name, args)| TypeSignature::GenericApplication(name, args));
-
-            // let generic_application = TypePath::parser()
-            //     .then(comma_separated(this.clone()).delimited_by(just("<"), just(">")))
-            //     .map(|(name, args)| TypeSignature::GenericApplication(name, args));
 
             let tuple = this
                 .clone()

@@ -1551,3 +1551,71 @@ fn parse_range_inclusive() {
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
     assert_eq!(result.output(), Some(&Expr::RangeInclusive(None, None)));
 }
+
+#[test]
+fn parse_use() {
+    let input = "use std::collections::HashMap";
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Use {
+            alias: None,
+            path: TypePath {
+                name: "HashMap",
+                path: Some(vec![
+                    TypePathSegment::Ident("std"),
+                    TypePathSegment::Ident("collections"),
+                ])
+            },
+        }
+    );
+
+    let input = "use std::collections::HashMap as Map";
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Use {
+            alias: Some("Map"),
+            path: TypePath {
+                name: "HashMap",
+                path: Some(vec![
+                    TypePathSegment::Ident("std"),
+                    TypePathSegment::Ident("collections"),
+                ])
+            },
+        }
+    );
+}
+
+#[test]
+fn use_in_statement_pos() {
+    let input = r#"
+    if true {
+        use std::collections::HashMap as Map;
+    }
+    "#;
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output(),
+        Some(&Expr::If {
+            cond: Box::new(Expr::Literal(Literal::Boolean(true))),
+            body: Box::new(Expr::Block {
+                body: vec![Stmt::Use {
+                    alias: Some("Map"),
+                    path: TypePath {
+                        name: "HashMap",
+                        path: Some(vec![
+                            TypePathSegment::Ident("std"),
+                            TypePathSegment::Ident("collections"),
+                        ])
+                    },
+                }],
+                terminator: None
+            }),
+            alternate: None,
+        })
+    );
+}

@@ -5,7 +5,7 @@ use chumsky::{
     Parser,
 };
 
-use crate::{expr::Expr, NodeParser};
+use crate::{expr::Expr, ty::TypePath, NodeParser};
 
 #[derive(Debug, PartialEq)]
 pub enum Stmt<'a> {
@@ -26,17 +26,14 @@ pub enum Stmt<'a> {
     Return(Option<Expr<'a>>),
     /// A break statement, e.g. `break;` or `break 42;`
     Break(Option<Expr<'a>>),
+    /// A `use` in the statement position, e.g. `use foo::bar;`
+    Use {
+        path: TypePath<'a>,
+        alias: Option<&'a str>,
+    },
 }
 
 impl<'a> Stmt<'a> {
-    pub fn is_terminator(&self) -> bool {
-        match self {
-            Stmt::Return(_) | Stmt::Break(_) => true,
-            Stmt::Expression(_) => true,
-            Stmt::Assignment(_, _) | Stmt::While { .. } | Stmt::For { .. } => false,
-        }
-    }
-
     pub fn is_return(&self) -> bool {
         match self {
             Stmt::Return(_) => true,

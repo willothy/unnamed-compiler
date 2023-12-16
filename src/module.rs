@@ -71,7 +71,10 @@ pub enum Declaration<'a> {
     /// A top-level import, e.g. `use package::path::to::type;`
     ///
     /// Not sure if this should be in [`Declaration`] or not...
-    Use { path: TypePath<'a> },
+    Use {
+        path: TypePath<'a>,
+        alias: Option<&'a str>,
+    },
 }
 
 impl<'a> NodeParser<'a, Self> for Declaration<'a> {
@@ -221,7 +224,14 @@ impl<'a> NodeParser<'a, Self> for Declaration<'a> {
 
         let r#use = keyword("use")
             .ignore_then(TypePath::parser().padded())
-            .map(|path| Declaration::Use { path });
+            .then(
+                keyword("as")
+                    .padded()
+                    .ignore_then(ident())
+                    .padded()
+                    .or_not(),
+            )
+            .map(|(path, alias)| Declaration::Use { path, alias });
 
         let r#alias = keyword("type")
             .ignore_then(
