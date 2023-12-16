@@ -1,8 +1,8 @@
-use chumsky::{error::Rich, extra, primitive::just, text::whitespace, IterParser, Parser};
+use chumsky::{primitive::just, text::whitespace, IterParser, Parser};
 
-pub fn comma_separated<'a, P: 'a + Parser<'a, &'a str, T, extra::Err<Rich<'a, char>>>, T: 'a>(
+pub fn comma_separated<'a, P: 'a + crate::Parser<'a, T>, T: 'a>(
     parser: P,
-) -> impl Parser<'a, &'a str, Vec<T>, extra::Err<Rich<'a, char>>> + Clone {
+) -> impl crate::Parser<'a, Vec<T>> {
     parser
         .separated_by(just(",").then_ignore(whitespace()))
         .collect::<Vec<_>>()

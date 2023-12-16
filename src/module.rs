@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 
 use chumsky::{
-    primitive::{choice, just},
+    error::Rich,
+    extra,
+    primitive::{choice, just, todo},
     text::{digits, ident, keyword},
-    IterParser as _, Parser as _,
+    IterParser as _, Parser,
 };
 
 use crate::{
@@ -11,6 +13,103 @@ use crate::{
     ty::{TypePath, TypeSignature},
     NodeParser,
 };
+
+/// A top-level import, e.g. `use package::path::to::type;`
+#[derive(Debug, PartialEq, Eq)]
+pub struct Import<'a> {
+    pub path: TypePath<'a>,
+    pub alias: Option<&'a str>,
+}
+
+impl<'a> NodeParser<'a, Self> for Import<'a> {
+    fn parser() -> impl crate::Parser<'a, Self> {
+        keyword("use")
+            .ignore_then(TypePath::parser().padded())
+            .then(
+                keyword("as")
+                    .padded()
+                    .ignore_then(ident())
+                    .padded()
+                    .or_not(),
+            )
+            .map(|(path, alias)| Import { path, alias })
+    }
+}
+
+/// A module at AST level, with no type information or import resolution.
+pub struct Module<'a> {
+    pub name: &'a str,
+    pub declarations: BTreeMap<&'a str, Declaration<'a>>,
+    pub imports: Vec<Import<'a>>,
+}
+
+impl<'a> Default for Module<'a> {
+    fn default() -> Self {
+        Self::new("main")
+    }
+}
+
+impl<'a> Module<'a> {
+    pub fn new(name: &'a str) -> Self {
+        Self {
+            name,
+            declarations: BTreeMap::new(),
+            imports: Vec::new(),
+        }
+    }
+
+    pub fn name(&self) -> &'a str {
+        self.name
+    }
+
+    pub fn declarations(&self) -> impl Iterator<Item = &Declaration<'a>> {
+        self.declarations.values()
+    }
+
+    pub fn declarations_mut(&mut self) -> impl Iterator<Item = &mut Declaration<'a>> {
+        self.declarations.values_mut()
+    }
+
+    pub fn declaration(&self, name: &str) -> Option<&Declaration<'a>> {
+        self.declarations.get(name)
+    }
+
+    pub fn declaration_mut(&mut self, name: &str) -> Option<&mut Declaration<'a>> {
+        self.declarations.get_mut(name)
+    }
+
+    pub fn insert(&mut self, decl: Declaration<'a>) {
+        self.declarations.insert(decl.name(), decl);
+    }
+
+    pub fn import(&mut self, path: TypePath<'a>, alias: Option<&'a str>) {
+        self.imports.push(Import { path, alias });
+    }
+
+    pub fn add_import(&mut self, import: Import<'a>) {
+        self.imports.push(import);
+    }
+
+    pub fn add_imports(&mut self, imports: Vec<Import<'a>>) {
+        self.imports.extend(imports);
+    }
+}
+
+impl<'a> NodeParser<'a, Self> for Module<'a> {
+    fn parser(
+    ) -> impl Parser<'a, &'a str, Self, extra::Full<Rich<'a, char>, Module<'a>, ()>> + Clone + 'a
+    {
+        // let decl = Declaration::parser();
+        //
+        // let r#use = Import::parser();
+        //
+        // decl.map_with(|d, e| {
+        //     state.declarations.insert(d.name(), d);
+        //     // todo
+        // })
+        todo()
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Variant<'a> {
@@ -68,22 +167,26 @@ pub enum Declaration<'a> {
         /// The type the alias points to. Unresolved at this stage.
         ty: TypeSignature<'a>,
     },
-    /// A top-level import, e.g. `use package::path::to::type;`
-    ///
-    /// Not sure if this should be in [`Declaration`] or not...
-    Use {
-        path: TypePath<'a>,
-        alias: Option<&'a str>,
-    },
+}
+
+impl<'a> Declaration<'a> {
+    pub fn name(&self) -> &'a str {
+        match self {
+            Declaration::Function { name, .. }
+            | Declaration::Struct { name, .. }
+            | Declaration::Enum { name, .. }
+            | Declaration::Union { name, .. }
+            | Declaration::Static { name, .. }
+            | Declaration::Constant { name, .. }
+            | Declaration::TypeAlias { name, .. } => name,
+        }
+    }
 }
 
 impl<'a> NodeParser<'a, Self> for Declaration<'a> {
-    fn parser() -> impl chumsky::prelude::Parser<
-        'a,
-        &'a str,
-        Self,
-        chumsky::prelude::extra::Err<chumsky::prelude::Rich<'a, char>>,
-    > + Clone
+    fn parser(
+    ) -> impl chumsky::prelude::Parser<'a, &'a str, Self, extra::Full<Rich<'a, char>, Module<'a>, ()>>
+           + Clone
            + 'a {
         let generic_params = ident()
             .padded()
@@ -222,17 +325,6 @@ impl<'a> NodeParser<'a, Self> for Declaration<'a> {
             )
             .map(|((name, ty), value)| Declaration::Constant { name, ty, value });
 
-        let r#use = keyword("use")
-            .ignore_then(TypePath::parser().padded())
-            .then(
-                keyword("as")
-                    .padded()
-                    .ignore_then(ident())
-                    .padded()
-                    .or_not(),
-            )
-            .map(|(path, alias)| Declaration::Use { path, alias });
-
         let r#alias = keyword("type")
             .ignore_then(
                 ident()
@@ -252,7 +344,6 @@ impl<'a> NodeParser<'a, Self> for Declaration<'a> {
             .or(r#union)
             .or(r#static)
             .or(r#const)
-            .or(r#use)
             .or(r#alias)
     }
 }

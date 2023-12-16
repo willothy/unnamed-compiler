@@ -1,6 +1,4 @@
 use chumsky::{
-    error::Rich,
-    extra,
     primitive::{choice, just},
     recursive::recursive,
     text::{ident, whitespace},
@@ -59,7 +57,7 @@ impl<'a> TypePath<'a> {
 }
 
 impl<'a> NodeParser<'a, TypePathSegment<'a>> for TypePathSegment<'a> {
-    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
+    fn parser() -> impl crate::Parser<'a, Self> {
         ident().map(|s| match s {
             "package" => Self::Package,
             "self" => Self::SelfModule,
@@ -70,7 +68,7 @@ impl<'a> NodeParser<'a, TypePathSegment<'a>> for TypePathSegment<'a> {
 }
 
 impl<'a> NodeParser<'a, TypePath<'a>> for TypePath<'a> {
-    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
+    fn parser() -> impl crate::Parser<'a, Self> {
         TypePathSegment::parser()
             .separated_by(just("::"))
             .at_least(2)
@@ -106,7 +104,7 @@ pub enum TypeSignature<'a> {
 }
 
 impl<'a> NodeParser<'a, TypeSignature<'a>> for TypeSignature<'a> {
-    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
+    fn parser() -> impl crate::Parser<'a, Self> {
         recursive(|this| {
             let unit = just("()").map(|_| TypeSignature::Unit);
 

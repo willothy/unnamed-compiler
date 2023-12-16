@@ -1,10 +1,15 @@
-use chumsky::{error::Rich, extra, Parser};
+#![feature(trait_alias)]
+use chumsky::{error::Rich, extra};
+use module::Module;
 
 pub mod expr;
 pub mod module;
 pub mod stmt;
 pub mod ty;
 pub mod util;
+
+pub trait Parser<'a, T> =
+    chumsky::Parser<'a, &'a str, T, extra::Full<Rich<'a, char>, Module<'a>, ()>> + Clone + 'a;
 
 /// Defines the interface used to construct a parser for a node type.
 ///
@@ -13,5 +18,5 @@ pub trait NodeParser<'a, T>
 where
     Self: 'a,
 {
-    fn parser() -> impl Parser<'a, &'a str, T, extra::Err<Rich<'a, char>>> + Clone + 'a;
+    fn parser() -> impl Parser<'a, T>;
 }

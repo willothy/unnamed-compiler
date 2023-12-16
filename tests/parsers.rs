@@ -3,7 +3,7 @@ use std::{borrow::Cow, collections::BTreeMap};
 use chumsky::{IterParser, Parser};
 use crane::{
     expr::{Expr, Literal},
-    module::{Declaration, Variant},
+    module::{Declaration, Import, Variant},
     stmt::{BinaryOp, Stmt, UnaryOp},
     ty::{TypePath, TypePathSegment, TypeSignature},
     NodeParser as _,
@@ -1553,13 +1553,13 @@ fn parse_range_inclusive() {
 }
 
 #[test]
-fn parse_use() {
+fn parse_import() {
     let input = "use std::collections::HashMap";
-    let result = Declaration::parser().parse(input);
+    let result = Import::parser().parse(input);
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
     assert_eq!(
         *result.output().unwrap(),
-        Declaration::Use {
+        Import {
             alias: None,
             path: TypePath {
                 name: "HashMap",
@@ -1572,11 +1572,11 @@ fn parse_use() {
     );
 
     let input = "use std::collections::HashMap as Map";
-    let result = Declaration::parser().parse(input);
+    let result = Import::parser().parse(input);
     assert!(!result.has_errors(), "{:#?}", result.into_errors());
     assert_eq!(
         *result.output().unwrap(),
-        Declaration::Use {
+        Import {
             alias: Some("Map"),
             path: TypePath {
                 name: "HashMap",
@@ -1603,7 +1603,7 @@ fn use_in_statement_pos() {
         Some(&Expr::If {
             cond: Box::new(Expr::Literal(Literal::Boolean(true))),
             body: Box::new(Expr::Block {
-                body: vec![Stmt::Use {
+                body: vec![Stmt::Use(Import {
                     alias: Some("Map"),
                     path: TypePath {
                         name: "HashMap",
@@ -1612,7 +1612,7 @@ fn use_in_statement_pos() {
                             TypePathSegment::Ident("collections"),
                         ])
                     },
-                }],
+                })],
                 terminator: None
             }),
             alternate: None,

@@ -1,11 +1,9 @@
 use chumsky::{
-    error::Rich,
-    extra,
     primitive::{choice, just},
     Parser,
 };
 
-use crate::{expr::Expr, ty::TypePath, NodeParser};
+use crate::{expr::Expr, module::Import, NodeParser};
 
 #[derive(Debug, PartialEq)]
 pub enum Stmt<'a> {
@@ -27,10 +25,7 @@ pub enum Stmt<'a> {
     /// A break statement, e.g. `break;` or `break 42;`
     Break(Option<Expr<'a>>),
     /// A `use` in the statement position, e.g. `use foo::bar;`
-    Use {
-        path: TypePath<'a>,
-        alias: Option<&'a str>,
-    },
+    Use(Import<'a>),
 }
 
 impl<'a> Stmt<'a> {
@@ -67,7 +62,7 @@ pub enum BinaryOp {
 }
 
 impl<'a> NodeParser<'a, BinaryOp> for BinaryOp {
-    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
+    fn parser() -> impl crate::Parser<'a, Self> {
         choice((
             just("+").map(|_| Self::Add),
             just("-").map(|_| Self::Subtract),
@@ -106,7 +101,7 @@ pub enum UnaryOp {
 }
 
 impl<'a> NodeParser<'a, UnaryOp> for UnaryOp {
-    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
+    fn parser() -> impl crate::Parser<'a, Self> {
         choice((
             just("*").to(Self::Dereference),
             just("&").to(Self::Reference),

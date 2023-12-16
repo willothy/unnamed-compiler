@@ -1,8 +1,6 @@
 use std::{borrow::Cow, collections::BTreeMap};
 
 use chumsky::{
-    error::Rich,
-    extra,
     pratt::postfix,
     primitive::{choice, just, none_of},
     recursive::recursive,
@@ -11,6 +9,7 @@ use chumsky::{
 };
 
 use crate::{
+    module::Import,
     stmt::{BinaryOp, Stmt, UnaryOp},
     ty::{TypePath, TypeSignature},
     util::comma_separated,
@@ -41,7 +40,7 @@ pub enum Literal<'a> {
 }
 
 impl<'a> NodeParser<'a, Self> for Literal<'a> {
-    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
+    fn parser() -> impl crate::Parser<'a, Self> {
         let unit = just("()").map(|_| Literal::Unit);
 
         let integer = just("0x")
@@ -191,9 +190,7 @@ pub enum Expr<'a> {
 }
 
 impl<'a> Expr<'a> {
-    pub fn block_parser(
-        expr: impl Parser<'a, &'a str, Expr<'a>, extra::Err<Rich<'a, char>>> + Clone + 'a,
-    ) -> impl Parser<'a, &'a str, Expr<'a>, extra::Err<Rich<'a, char>>> + Clone + 'a {
+    pub fn block_parser(expr: impl crate::Parser<'a, Self>) -> impl crate::Parser<'a, Self> {
         recursive(|block| {
             let assignment = expr
                 .clone()
@@ -228,16 +225,7 @@ impl<'a> Expr<'a> {
                     body,
                 });
 
-            let r#use = keyword("use")
-                .ignore_then(TypePath::parser().padded())
-                .then(
-                    keyword("as")
-                        .padded()
-                        .ignore_then(ident())
-                        .padded()
-                        .or_not(),
-                )
-                .map(|(path, alias)| Stmt::Use { path, alias });
+            let r#use = Import::parser().map(Stmt::Use);
 
             let stmt = choice((
                 r#return,
@@ -285,7 +273,7 @@ impl<'a> Expr<'a> {
 }
 
 impl<'a> NodeParser<'a, Self> for Expr<'a> {
-    fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
+    fn parser() -> impl crate::Parser<'a, Self> {
         // TODO: Differentiate between lhs and rhs expressions
         // - LHS expressions are used in let bindings, match patterns, and destructuring
         // - Differentiation based on context is necesssary due to ambiguity between function
