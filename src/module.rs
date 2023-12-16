@@ -1,8 +1,9 @@
 use std::{
-    cell::RefCell,
+    cell::{Ref, RefCell, RefMut},
     collections::{BTreeMap, HashMap},
     path::PathBuf,
     rc::Rc,
+    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 use chumsky::{
@@ -11,6 +12,7 @@ use chumsky::{
     text::{digits, ident, keyword},
     IterParser as _, ParseResult, Parser,
 };
+use lasso::{Rodeo, Spur};
 
 use crate::{
     expr::Expr,
@@ -22,7 +24,7 @@ use crate::{
 #[derive(Debug, PartialEq, Eq)]
 pub struct Import {
     pub path: TypePath,
-    pub alias: Option<Rc<str>>,
+    pub alias: Option<Spur>,
 }
 
 impl<'a> NodeParser<'a, Self> for Import {
@@ -32,7 +34,11 @@ impl<'a> NodeParser<'a, Self> for Import {
             .then(
                 keyword("as")
                     .padded()
-                    .ignore_then(ident().map(Rc::<str>::from))
+                    .ignore_then(ident().map_with(|s, e| {
+                        let state: &mut Module = e.state();
+                        let mut interner = state.interner.write().expect("to get a write lock");
+                        interner.get_or_intern(s)
+                    }))
                     .padded()
                     .or_not(),
             )
@@ -43,13 +49,15 @@ impl<'a> NodeParser<'a, Self> for Import {
 /// A module at AST level, with no type information or import resolution.
 #[derive(Debug)]
 pub struct Module {
-    pub name: Rc<str>,
+    pub name: Spur,
     pub source: PathBuf,
-    pub declarations: BTreeMap<Rc<str>, Declaration>,
+    pub declarations: BTreeMap<Spur, Declaration>,
     pub imports: Vec<Import>,
-    pub submodules: BTreeMap<Rc<str>, Module>,
+    pub submodules: BTreeMap<Spur, Module>,
     // TODO: abstract over file cache to fetch files
     file_cache: Rc<RefCell<HashMap<PathBuf, Rc<str>>>>,
+    // TODO: multithreading (later on, but using RwLock now should make that easier)
+    interner: Rc<RwLock<Rodeo>>,
 }
 
 impl PartialEq for Module {
@@ -60,7 +68,7 @@ impl PartialEq for Module {
 
 impl<'a> Default for Module {
     fn default() -> Self {
-        Self::new("main", PathBuf::new(), None)
+        Self::new("main", PathBuf::new(), None, None)
     }
 }
 
@@ -69,19 +77,46 @@ impl Module {
         name: &str,
         source: PathBuf,
         cache: Option<Rc<RefCell<HashMap<PathBuf, Rc<str>>>>>,
+        interner: Option<Rc<RwLock<Rodeo>>>,
     ) -> Self {
+        let interner = interner.unwrap_or_default();
+        let name = interner
+            .write()
+            .expect("to lock interner")
+            .get_or_intern(name);
         Self {
-            name: name.into(),
+            name,
             source,
             imports: Vec::new(),
             declarations: BTreeMap::new(),
             submodules: BTreeMap::new(),
             file_cache: cache.unwrap_or_default(),
+            interner,
         }
     }
 
-    pub fn name(&self) -> &str {
-        self.name.as_ref()
+    pub fn file_cache(&self) -> Ref<'_, HashMap<PathBuf, Rc<str>>> {
+        self.file_cache.borrow()
+    }
+
+    pub fn file_cache_mut(&mut self) -> RefMut<'_, HashMap<PathBuf, Rc<str>>> {
+        self.file_cache.borrow_mut()
+    }
+
+    pub fn interner(&self) -> RwLockReadGuard<'_, Rodeo> {
+        self.interner.read().expect("to lock interner")
+    }
+
+    pub fn interner_mut(&mut self) -> RwLockWriteGuard<'_, Rodeo> {
+        self.interner.write().expect("to lock interner")
+    }
+
+    pub fn source(&self) -> &PathBuf {
+        &self.source
+    }
+
+    pub fn name<'a>(&self) -> Spur {
+        self.name
     }
 
     pub fn declarations(&self) -> impl Iterator<Item = &Declaration> {
@@ -93,18 +128,28 @@ impl Module {
     }
 
     pub fn declaration(&self, name: &str) -> Option<&Declaration> {
-        self.declarations.get(name)
+        let name = self
+            .interner
+            .write()
+            .expect("to get a read lock")
+            .get_or_intern(name);
+        self.declarations.get(&name)
     }
 
     pub fn declaration_mut(&mut self, name: &str) -> Option<&mut Declaration> {
-        self.declarations.get_mut(name)
+        let name = self
+            .interner
+            .write()
+            .expect("to get a read lock")
+            .get_or_intern(name);
+        self.declarations.get_mut(&name)
     }
 
     pub fn insert(&mut self, decl: Declaration) {
         self.declarations.insert(decl.name().into(), decl);
     }
 
-    pub fn import(&mut self, path: TypePath, alias: Option<Rc<str>>) {
+    pub fn import(&mut self, path: TypePath, alias: Option<Spur>) {
         self.imports.push(Import { path, alias });
     }
 
@@ -117,22 +162,32 @@ impl Module {
     }
 
     pub fn add_submodule(&mut self, module: Module) {
-        self.submodules.insert(module.name().into(), module);
+        self.submodules.insert(module.name, module);
     }
 
     pub fn submodule(&self, name: &str) -> Option<&Module> {
-        self.submodules.get(name)
+        let name = self
+            .interner
+            .write()
+            .expect("to get a read lock")
+            .get_or_intern(name);
+        self.submodules.get(&name)
     }
 
     pub fn submodule_mut(&mut self, name: &str) -> Option<&mut Module> {
-        self.submodules.get_mut(name)
+        let name = self
+            .interner
+            .write()
+            .expect("to get a read lock")
+            .get_or_intern(name);
+        self.submodules.get_mut(&name)
     }
 
     pub fn parse_submodules(&mut self) {
         for (_, module) in self.submodules.iter_mut() {
             let input = self.file_cache.borrow();
             // TODO: Handle submodules properly with subdirs and files
-            let input = input.get(&module.source).unwrap().as_ref();
+            let input = input.get(&module.source).unwrap();
             module.parse(input);
         }
     }
@@ -156,10 +211,17 @@ impl<'a> NodeParser<'a, ()> for Module {
             Declaration::Module { name } => {
                 let state = e.state();
                 // TODO: Handle submodules properly with subdirs and files
-                let src = state.source.join(name.as_ref()).with_extension("cr");
+                let interner = state.interner.read().expect("to get a read lock");
+                let name_str = interner.resolve(&name);
+                let src = state.source.join(name_str).with_extension("cr");
                 state.submodules.insert(
-                    Rc::clone(&name),
-                    Module::new(name.as_ref(), src, Some(Rc::clone(&state.file_cache))),
+                    name,
+                    Module::new(
+                        name_str,
+                        src,
+                        Some(Rc::clone(&state.file_cache)),
+                        Some(Rc::clone(&state.interner)),
+                    ),
                 );
             }
             _ => {
@@ -179,7 +241,7 @@ pub enum Variant {
     /// A tuple-style variant, e.g. `TupleVariant(int, int)`
     Tuple(Vec<TypeSignature>),
     /// A struct-style variant, e.g. `StructVariant { field: int }`
-    Struct(BTreeMap<Rc<str>, TypeSignature>),
+    Struct(BTreeMap<Spur, TypeSignature>),
     /// A variant with a single value, e.g. `CStyleVariant = 42`
     Integer(i64),
 }
@@ -187,54 +249,54 @@ pub enum Variant {
 #[derive(Debug, PartialEq)]
 pub enum Declaration {
     Function {
-        name: Rc<str>,
-        params: Vec<(Rc<str>, TypeSignature)>,
-        generic_params: Option<Vec<Rc<str>>>,
+        name: Spur,
+        params: Vec<(Spur, TypeSignature)>,
+        generic_params: Option<Vec<Spur>>,
         ret: Option<TypeSignature>,
         body: Expr,
     },
     Struct {
-        name: Rc<str>,
-        generic_params: Option<Vec<Rc<str>>>,
+        name: Spur,
+        generic_params: Option<Vec<Spur>>,
         value: Variant,
     },
     Enum {
-        name: Rc<str>,
-        generic_params: Option<Vec<Rc<str>>>,
-        variants: Vec<(Rc<str>, Variant)>,
+        name: Spur,
+        generic_params: Option<Vec<Spur>>,
+        variants: Vec<(Spur, Variant)>,
     },
     Union {
-        name: Rc<str>,
-        generic_params: Option<Vec<Rc<str>>>,
-        variants: BTreeMap<Rc<str>, TypeSignature>,
+        name: Spur,
+        generic_params: Option<Vec<Spur>>,
+        variants: BTreeMap<Spur, TypeSignature>,
     },
     Static {
-        name: Rc<str>,
+        name: Spur,
         ty: TypeSignature,
         value: Expr,
     },
     Constant {
-        name: Rc<str>,
+        name: Spur,
         ty: TypeSignature,
         value: Expr,
     },
     /// A type alias, e.g. `type Foo<T> = Vec<T>;`
     TypeAlias {
-        name: Rc<str>,
+        name: Spur,
         /// The generic parameters of the type alias, if any.
         ///
         /// The `T` in `type Foo<T> = Vec<T>;` is a generic parameter.
-        generic_params: Option<Vec<Rc<str>>>,
+        generic_params: Option<Vec<Spur>>,
         /// The type the alias points to. Unresolved at this stage.
         ty: TypeSignature,
     },
     Module {
-        name: Rc<str>,
+        name: Spur,
     },
 }
 
 impl Declaration {
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> Spur {
         match self {
             Declaration::Function { name, .. }
             | Declaration::Struct { name, .. }
@@ -242,8 +304,8 @@ impl Declaration {
             | Declaration::Union { name, .. }
             | Declaration::Static { name, .. }
             | Declaration::Constant { name, .. }
-            | Declaration::TypeAlias { name, .. } => name,
-            Declaration::Module { name } => name,
+            | Declaration::TypeAlias { name, .. } => *name,
+            Declaration::Module { name } => *name,
         }
     }
 }
@@ -251,7 +313,11 @@ impl Declaration {
 impl<'a> NodeParser<'a, Self> for Declaration {
     fn parser() -> impl crate::Parser<'a, Self> {
         let generic_params = ident()
-            .map(Rc::<str>::from)
+            .map_with(|s, e| {
+                let state: &mut Module = e.state();
+                let mut interner = state.interner.write().expect("to get a write lock");
+                interner.get_or_intern(s)
+            })
             .padded()
             .separated_by(just(",").padded())
             .collect::<Vec<_>>()
@@ -260,10 +326,23 @@ impl<'a> NodeParser<'a, Self> for Declaration {
             .or_not();
 
         let r#fn = keyword("fn")
-            .ignore_then(ident().map(Rc::<str>::from).padded().then(generic_params))
+            .ignore_then(
+                ident()
+                    .map_with(|s, e| {
+                        let state: &mut Module = e.state();
+                        let mut interner = state.interner.write().expect("to get a write lock");
+                        interner.get_or_intern(s)
+                    })
+                    .padded()
+                    .then(generic_params),
+            )
             .then(
                 ident()
-                    .map(Rc::<str>::from)
+                    .map_with(|s, e| {
+                        let state: &mut Module = e.state();
+                        let mut interner = state.interner.write().expect("to get a write lock");
+                        interner.get_or_intern(s)
+                    })
                     .padded()
                     .then_ignore(just(":").padded())
                     .then(TypeSignature::parser().padded())
@@ -284,7 +363,11 @@ impl<'a> NodeParser<'a, Self> for Declaration {
             );
 
         let struct_variant = ident()
-            .map(Rc::<str>::from)
+            .map_with(|s, e| {
+                let state: &mut Module = e.state();
+                let mut interner = state.interner.write().expect("to get a write lock");
+                interner.get_or_intern(s)
+            })
             .padded()
             .then_ignore(just(":").padded())
             .then(TypeSignature::parser().padded())
@@ -306,7 +389,11 @@ impl<'a> NodeParser<'a, Self> for Declaration {
         let r#struct = keyword("struct")
             .ignore_then(
                 ident()
-                    .map(Rc::<str>::from)
+                    .map_with(|s, e| {
+                        let state: &mut Module = e.state();
+                        let mut interner = state.interner.write().expect("to get a write lock");
+                        interner.get_or_intern(s)
+                    })
                     .padded()
                     .then(generic_params)
                     .then(
@@ -333,11 +420,23 @@ impl<'a> NodeParser<'a, Self> for Declaration {
 
         let r#enum = keyword("enum")
             .padded()
-            .ignore_then(ident().map(Rc::<str>::from).padded())
+            .ignore_then(
+                ident()
+                    .map_with(|s, e| {
+                        let state: &mut Module = e.state();
+                        let mut interner = state.interner.write().expect("to get a write lock");
+                        interner.get_or_intern(s)
+                    })
+                    .padded(),
+            )
             .then(generic_params)
             .then(
                 ident()
-                    .map(Rc::<str>::from)
+                    .map_with(|s, e| {
+                        let state: &mut Module = e.state();
+                        let mut interner = state.interner.write().expect("to get a write lock");
+                        interner.get_or_intern(s)
+                    })
                     .padded()
                     .then(
                         choice((struct_variant, tuple_variant, int_variant))
@@ -358,12 +457,21 @@ impl<'a> NodeParser<'a, Self> for Declaration {
         let r#union = keyword("union")
             .ignore_then(
                 ident()
-                    .map(Rc::<str>::from)
+                    .map_with(|s, e| {
+                        let state: &mut Module = e.state();
+                        let mut interner = state.interner.write().expect("to get a write lock");
+                        interner.get_or_intern(s)
+                    })
                     .padded()
                     .then(generic_params)
                     .then(
                         ident()
-                            .map(Rc::<str>::from)
+                            .map_with(|s, e| {
+                                let state: &mut Module = e.state();
+                                let mut interner =
+                                    state.interner.write().expect("to get a write lock");
+                                interner.get_or_intern(s)
+                            })
                             .padded()
                             .then_ignore(just(":").padded())
                             .then(TypeSignature::parser().padded())
@@ -379,13 +487,25 @@ impl<'a> NodeParser<'a, Self> for Declaration {
             });
 
         let r#mod = keyword("mod")
-            .ignore_then(ident().map(Rc::<str>::from).padded())
+            .ignore_then(
+                ident()
+                    .map_with(|s, e| {
+                        let state: &mut Module = e.state();
+                        let mut interner = state.interner.write().expect("to get a write lock");
+                        interner.get_or_intern(s)
+                    })
+                    .padded(),
+            )
             .map(|name| Declaration::Module { name });
 
         let r#static = keyword("static")
             .ignore_then(
                 ident()
-                    .map(Rc::<str>::from)
+                    .map_with(|s, e| {
+                        let state: &mut Module = e.state();
+                        let mut interner = state.interner.write().expect("to get a write lock");
+                        interner.get_or_intern(s)
+                    })
                     .padded()
                     .then_ignore(just(":").padded())
                     .then(TypeSignature::parser().padded())
@@ -397,7 +517,11 @@ impl<'a> NodeParser<'a, Self> for Declaration {
         let r#const = keyword("const")
             .ignore_then(
                 ident()
-                    .map(Rc::<str>::from)
+                    .map_with(|s, e| {
+                        let state: &mut Module = e.state();
+                        let mut interner = state.interner.write().expect("to get a write lock");
+                        interner.get_or_intern(s)
+                    })
                     .padded()
                     .then_ignore(just(":").padded())
                     .then(TypeSignature::parser().padded())
@@ -409,7 +533,11 @@ impl<'a> NodeParser<'a, Self> for Declaration {
         let r#alias = keyword("type")
             .ignore_then(
                 ident()
-                    .map(Rc::<str>::from)
+                    .map_with(|s, e| {
+                        let state: &mut Module = e.state();
+                        let mut interner = state.interner.write().expect("to get a write lock");
+                        interner.get_or_intern(s)
+                    })
                     .padded()
                     .then(generic_params)
                     .then_ignore(just("=").padded())

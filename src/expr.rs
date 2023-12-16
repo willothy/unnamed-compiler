@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, rc::Rc};
+use std::collections::BTreeMap;
 
 use chumsky::{
     pratt::postfix,
@@ -7,23 +7,15 @@ use chumsky::{
     text::{ident, keyword},
     IterParser, Parser,
 };
+use lasso::Spur;
 
 use crate::{
-    module::Import,
+    module::{Import, Module},
     stmt::{BinaryOp, Stmt, UnaryOp},
     ty::{TypePath, TypeSignature},
     util::comma_separated,
     NodeParser,
 };
-
-#[derive(Debug, PartialEq)]
-pub enum SharedCow<T>
-where
-    T: ?Sized,
-{
-    Shared(Rc<T>),
-    Owned(String),
-}
 
 /// Represents a literal value at parse level.
 #[derive(Debug, PartialEq)]
@@ -35,7 +27,7 @@ pub enum Literal {
     /// A float literal, e.g. `3.14` or `0.1e-10`
     Float(f64),
     /// A string literal, e.g. `"Hello, world!"`
-    String(SharedCow<str>),
+    String(Spur),
     /// A utf-8 character literal, e.g. `'a'`
     Char(char),
     /// A boolean literal, e.g. `true` or `false`
@@ -43,7 +35,7 @@ pub enum Literal {
     /// A tuple literal, e.g. `(1, 2, 3)`
     Tuple(Vec<Expr>),
     /// A struct literal / initializer, e.g. `Struct { field: 42 }`
-    Struct(TypePath, BTreeMap<Rc<str>, Expr>),
+    Struct(TypePath, BTreeMap<Spur, Expr>),
     /// An array initializer, e.g. `[1, 2, 3]`
     Array(Vec<Expr>),
 }
@@ -118,7 +110,11 @@ impl<'a> NodeParser<'a, Self> for Literal {
             .repeated()
             .collect::<Vec<char>>()
             .delimited_by(just('"'), just('"'))
-            .map(|s| Literal::String(SharedCow::Shared(s.into_iter().collect::<String>().into())));
+            .map_with(|s, e| {
+                let state: &mut Module = e.state();
+                let mut interner = state.interner_mut();
+                Literal::String(interner.get_or_intern(s.into_iter().collect::<String>()))
+            });
 
         let char = none_of("\\'")
             .or(escape)
@@ -149,14 +145,14 @@ pub enum Expr {
     /// A unary expression, e.g. `*foo` or `-42`
     Unary(UnaryOp, Box<Expr>),
     /// An identifier, e.g. `foo`
-    Identifier(Rc<str>),
+    Identifier(Spur),
     /// A call expression, e.g. `foo(42, 3.14)`
     Call(Box<Expr>, Vec<Expr>),
     /// An array index expression, e.g. `foo[42]`
     Index(Box<Expr>, Box<Expr>),
     /// A struct field access, e.g. `foo.bar`
     /// This is used for both struct fields and enum variants.
-    StructField(Box<Expr>, Rc<str>),
+    StructField(Box<Expr>, Spur),
     /// A tuple field access, e.g. `foo.0`
     TupleField(Box<Expr>, usize),
     /// A block expression, e.g. `{ let x = 42; x }`
@@ -185,7 +181,7 @@ pub enum Expr {
         ty: Option<TypeSignature>,
         value: Option<Box<Expr>>,
     },
-    StaticAccess(Box<Expr>, Rc<str>),
+    StaticAccess(Box<Expr>, Spur),
     Range(Option<Box<Expr>>, Option<Box<Expr>>),
     RangeInclusive(Option<Box<Expr>>, Option<Box<Expr>>),
 }
@@ -364,9 +360,14 @@ impl<'a> NodeParser<'a, Self> for Expr {
                 .map(Expr::Literal);
 
             let struct_field = ident()
+                .map_with(|s, e| {
+                    let state: &mut Module = e.state();
+                    let mut interner = state.interner_mut();
+                    interner.get_or_intern(s)
+                })
                 .then_ignore(just(":").padded())
                 .then(expr.clone())
-                .map(|(name, value)| (Rc::<str>::from(name), value));
+                .map(|(name, value)| (name, value));
 
             let struct_ = TypePath::parser()
                 .then_ignore(just("{").padded())
@@ -392,7 +393,11 @@ impl<'a> NodeParser<'a, Self> for Expr {
                 array,
                 unit,
                 block,
-                ident().padded().map(|s: &str| Expr::Identifier(s.into())),
+                ident().padded().map_with(|s: &str, e| {
+                    let state: &mut Module = e.state();
+                    let mut interner = state.interner_mut();
+                    Expr::Identifier(interner.get_or_intern(s))
+                }),
                 tuple,
                 expr.clone().padded().delimited_by(just("("), just(")")),
             ));
@@ -413,9 +418,15 @@ impl<'a> NodeParser<'a, Self> for Expr {
                         .delimited_by(just('(').padded(), just(')').padded()),
                     |lhs, args| Expr::Call(Box::new(lhs), args),
                 ),
-                postfix(3, just(".").ignore_then(ident()), |lhs, rhs| {
-                    Expr::StructField(Box::new(lhs), Rc::<str>::from(rhs))
-                }),
+                postfix(
+                    3,
+                    just(".").ignore_then(ident().map_with(|s, e| {
+                        let state: &mut Module = e.state();
+                        let mut interner = state.interner_mut();
+                        interner.get_or_intern(s)
+                    })),
+                    |lhs, rhs| Expr::StructField(Box::new(lhs), rhs),
+                ),
                 postfix(
                     3,
                     just(".").ignore_then(chumsky::text::int(10)),
@@ -425,9 +436,15 @@ impl<'a> NodeParser<'a, Self> for Expr {
                     },
                 ),
                 // module access
-                postfix(3, just("::").ignore_then(ident()), |lhs, rhs| {
-                    Expr::StaticAccess(Box::new(lhs), Rc::<str>::from(rhs))
-                }),
+                postfix(
+                    3,
+                    just("::").ignore_then(ident().map_with(|s, e| {
+                        let state: &mut Module = e.state();
+                        let mut interner = state.interner_mut();
+                        interner.get_or_intern(s)
+                    })),
+                    |lhs, rhs| Expr::StaticAccess(Box::new(lhs), rhs),
+                ),
             ));
 
             let unary_op = just("-")

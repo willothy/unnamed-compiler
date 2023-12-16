@@ -1,20 +1,19 @@
-use std::rc::Rc;
-
 use chumsky::{
     primitive::{choice, just},
     recursive::recursive,
     text::{ident, whitespace},
     IterParser, Parser,
 };
+use lasso::Spur;
 
-use crate::{util::comma_separated, NodeParser};
+use crate::{module::Module, util::comma_separated, NodeParser};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum TypePathSegment {
     Package,
     SelfModule,
     SuperModule,
-    Ident(Rc<str>),
+    Ident(Spur),
 }
 
 /// Represents a type path, e.g. `package::path::to::type`.
@@ -28,7 +27,7 @@ pub enum TypePathSegment {
 #[derive(Debug, PartialEq, Eq)]
 pub struct TypePath {
     /// The actual type name.
-    pub name: Rc<str>,
+    pub name: Spur,
     /// The path to the type, if any, starting with the package name
     /// or `package`, `self` or `super`.
     pub path: Option<Vec<TypePathSegment>>,
@@ -60,11 +59,15 @@ impl TypePath {
 
 impl<'a> NodeParser<'a, TypePathSegment> for TypePathSegment {
     fn parser() -> impl crate::Parser<'a, Self> {
-        ident().map(|s| match s {
+        ident().map_with(|s, e| match s {
             "package" => Self::Package,
             "self" => Self::SelfModule,
             "super" => Self::SuperModule,
-            name => Self::Ident(name.into()),
+            name => {
+                let state: &mut Module = e.state();
+                let name = state.interner_mut().get_or_intern(name);
+                Self::Ident(name)
+            }
         })
     }
 }
@@ -86,9 +89,13 @@ impl<'a> NodeParser<'a, TypePath> for TypePath {
                     path: Some(path),
                 }
             })
-            .or(ident().map(|name: &str| TypePath {
-                name: name.into(),
-                path: None,
+            .or(ident().map_with(|name: &str, e| {
+                let state: &mut Module = e.state();
+                let name = state.interner_mut().get_or_intern(name);
+                TypePath {
+                    name: name.into(),
+                    path: None,
+                }
             }))
     }
 }

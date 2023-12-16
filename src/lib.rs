@@ -9,8 +9,9 @@ pub mod stmt;
 pub mod ty;
 pub mod util;
 
-pub trait Parser<'a, T> =
-    chumsky::Parser<'a, &'a str, T, extra::Full<Rich<'a, char>, Module, ()>> + Clone + 'a;
+pub type Extra<'a> = extra::Full<Rich<'a, char>, Module, ()>;
+
+pub trait Parser<'a, T> = chumsky::Parser<'a, &'a str, T, Extra<'a>> + Clone + 'a;
 
 /// Defines the interface used to construct a parser for a node type.
 ///
