@@ -1619,3 +1619,34 @@ fn use_in_statement_pos() {
         })
     );
 }
+
+#[test]
+fn multiline_method_chain() {
+    let input = r#"
+    foo
+        .bar()
+        .baz()
+        .qux()
+    "#;
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::Call(
+            Box::new(Expr::StructField(
+                Box::new(Expr::Call(
+                    Box::new(Expr::StructField(
+                        Box::new(Expr::Call(
+                            Box::new(Expr::StructField(Box::new(Expr::Identifier("foo")), "bar")),
+                            vec![]
+                        )),
+                        "baz"
+                    )),
+                    vec![]
+                )),
+                "qux"
+            )),
+            vec![]
+        )
+    );
+}
