@@ -2,6 +2,6 @@
 
 ## Todo
 
-- [ ] File cache to have more ergonomic access than `Rc<RefCell<HashMap<PathBuf, Str>>>`
-- [ ] LHS expression differentiation / alternate parsers
+- [ ] Refactor file cache to have more ergonomic access than `Rc<RefCell<HashMap<PathBuf, Str>>>`
+- [ ] LHS expression differentiation / context-based parsing
 - [ ] Pattern matching expression parsing + tests
