@@ -102,7 +102,7 @@ impl<'a> NodeParser<'a, Self> for Declaration<'a> {
                     .delimited_by(just("(").padded(), just(")").padded()),
             )
             .then(TypeSignature::parser().padded().or_not())
-            .then(Expr::parser())
+            .then(Expr::block_parser(Expr::parser()))
             .map(
                 |((((name, generic_params), params), ret), body)| Declaration::Function {
                     name,

@@ -188,6 +188,88 @@ pub enum Expr<'a> {
     StaticAccess(Box<Expr<'a>>, &'a str),
 }
 
+impl<'a> Expr<'a> {
+    pub fn block_parser(
+        expr: impl Parser<'a, &'a str, Expr<'a>, extra::Err<Rich<'a, char>>> + Clone + 'a,
+    ) -> impl Parser<'a, &'a str, Expr<'a>, extra::Err<Rich<'a, char>>> + Clone + 'a {
+        recursive(|block| {
+            let assignment = expr
+                .clone()
+                .padded()
+                .then_ignore(just("=").padded())
+                .then(expr.clone())
+                .map(|(lhs, rhs)| Stmt::Assignment(lhs, rhs));
+
+            let r#return = keyword("return")
+                .ignore_then(expr.clone().or_not())
+                .map(Stmt::Return);
+
+            let r#break = keyword("break")
+                .then(expr.clone().or_not())
+                .map(|(_, val)| Stmt::Break(val));
+            let r#while = keyword("while")
+                .ignore_then(expr.clone())
+                .then(block.clone())
+                .map(|(cond, body)| Stmt::While {
+                    condition: cond,
+                    body,
+                });
+
+            let r#for = keyword("for")
+                .ignore_then(expr.clone().padded())
+                .then_ignore(keyword("in").padded())
+                .then(expr.clone().padded())
+                .then(block.clone())
+                .map(|((pattern, iter), body)| Stmt::For {
+                    pattern,
+                    iter,
+                    body,
+                });
+
+            let stmt = choice((
+                assignment,
+                r#return,
+                r#break,
+                r#while,
+                r#for,
+                expr.clone().map(Stmt::Expression),
+            ));
+            stmt.separated_by(just(";").padded())
+                .collect::<Vec<_>>()
+                .then(just(";").padded().or_not())
+                .delimited_by(just("{").padded(), just("}").padded())
+                .map(|(mut body, trailing)| {
+                    let terminator = match body.last() {
+                        Some(terminator) => match terminator {
+                            Stmt::Return(_) => {
+                                let Stmt::Return(expr) = body.pop().unwrap() else {
+                                    unreachable!();
+                                };
+                                expr.map(Box::new)
+                            }
+                            Stmt::Break(_) => {
+                                let Stmt::Break(expr) = body.pop().unwrap() else {
+                                    unreachable!();
+                                };
+                                expr.map(Box::new)
+                            }
+                            Stmt::Expression(_) if trailing.is_none() => {
+                                let Stmt::Expression(expr) = body.pop().unwrap() else {
+                                    unreachable!();
+                                };
+                                Some(Box::new(expr))
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+
+                    Expr::Block { body, terminator }
+                })
+        })
+    }
+}
+
 impl<'a> NodeParser<'a, Self> for Expr<'a> {
     fn parser() -> impl Parser<'a, &'a str, Self, extra::Err<Rich<'a, char>>> + Clone + 'a {
         // TODO: Differentiate between lhs and rhs expressions
@@ -215,82 +297,7 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                     arms,
                 });
 
-            let assignment = expr
-                .clone()
-                .padded()
-                .then_ignore(just("=").padded())
-                .then(expr.clone())
-                .map(|(lhs, rhs)| Stmt::Assignment(lhs, rhs));
-
-            let r#return = keyword("return")
-                .ignore_then(expr.clone().or_not())
-                .map(Stmt::Return);
-
-            let r#break = keyword("break")
-                .then(expr.clone().or_not())
-                .map(|(_, val)| Stmt::Break(val));
-
-            let block = recursive(|block| {
-                let r#while = keyword("while")
-                    .ignore_then(expr.clone())
-                    .then(block.clone())
-                    .map(|(cond, body)| Stmt::While {
-                        condition: cond,
-                        body,
-                    });
-
-                let r#for = keyword("for")
-                    .ignore_then(expr.clone().padded())
-                    .then_ignore(keyword("in").padded())
-                    .then(expr.clone().padded())
-                    .then(block.clone())
-                    .map(|((pattern, iter), body)| Stmt::For {
-                        pattern,
-                        iter,
-                        body,
-                    });
-
-                let stmt = choice((
-                    assignment,
-                    r#return,
-                    r#break,
-                    r#while,
-                    r#for,
-                    expr.clone().map(Stmt::Expression),
-                ));
-                stmt.separated_by(just(";").padded())
-                    .collect::<Vec<_>>()
-                    .then(just(";").padded().or_not())
-                    .delimited_by(just("{").padded(), just("}").padded())
-                    .map(|(mut body, trailing)| {
-                        let terminator = match body.last() {
-                            Some(terminator) => match terminator {
-                                Stmt::Return(_) => {
-                                    let Stmt::Return(expr) = body.pop().unwrap() else {
-                                        unreachable!();
-                                    };
-                                    expr.map(Box::new)
-                                }
-                                Stmt::Break(_) => {
-                                    let Stmt::Break(expr) = body.pop().unwrap() else {
-                                        unreachable!();
-                                    };
-                                    expr.map(Box::new)
-                                }
-                                Stmt::Expression(_) if trailing.is_none() => {
-                                    let Stmt::Expression(expr) = body.pop().unwrap() else {
-                                        unreachable!();
-                                    };
-                                    Some(Box::new(expr))
-                                }
-                                _ => None,
-                            },
-                            _ => None,
-                        };
-
-                        Expr::Block { body, terminator }
-                    })
-            });
+            let block = Self::block_parser(expr.clone());
 
             let r#let = keyword("let")
                 .ignore_then(expr.clone().padded())
@@ -389,6 +396,10 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
             .boxed();
 
             let access = atom.pratt((
+                // range
+                postfix(3, just("..").ignore_then(expr.clone()), |lhs, rhs| {
+                    Expr::Binary(Box::new(lhs), BinaryOp::Range, Box::new(rhs))
+                }),
                 // index and call ops
                 postfix(
                     3,

@@ -1336,6 +1336,35 @@ fn function_decl() {
             }
         }
     );
+
+    // multiple statements
+    let input = r#"fn foo() int {
+        let bar = 42;
+        bar
+    }"#;
+
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Declaration::Function {
+            name: "foo",
+            generic_params: None,
+            params: vec![],
+            ret: Some(TypeSignature::Named(TypePath {
+                name: "int",
+                path: None
+            })),
+            body: Expr::Block {
+                body: vec![Stmt::Expression(Expr::Let {
+                    pattern: Box::new(Expr::Identifier("bar")),
+                    ty: None,
+                    value: Some(Box::new(Expr::Literal(Literal::Integer(42)))),
+                }),],
+                terminator: Some(Box::new(Expr::Identifier("bar")))
+            }
+        }
+    );
 }
 
 #[test]
