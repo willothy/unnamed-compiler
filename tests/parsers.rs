@@ -797,6 +797,64 @@ fn index_and_call_orders() {
             vec![Expr::Literal(Literal::Float(3.14))]
         )
     );
+
+    // with range
+    let input = "foo[42..][3.14](2.71)";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::Call(
+            Box::new(Expr::Index(
+                Box::new(Expr::Index(
+                    Box::new(Expr::Identifier("foo")),
+                    Box::new(Expr::Range(
+                        Some(Box::new(Expr::Literal(Literal::Integer(42)))),
+                        None
+                    ))
+                )),
+                Box::new(Expr::Literal(Literal::Float(3.14)))
+            )),
+            vec![Expr::Literal(Literal::Float(2.71))]
+        )
+    );
+
+    let input = "foo[..42][3.14](2.71)";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::Call(
+            Box::new(Expr::Index(
+                Box::new(Expr::Index(
+                    Box::new(Expr::Identifier("foo")),
+                    Box::new(Expr::Range(
+                        None,
+                        Some(Box::new(Expr::Literal(Literal::Integer(42)))),
+                    ))
+                )),
+                Box::new(Expr::Literal(Literal::Float(3.14)))
+            )),
+            vec![Expr::Literal(Literal::Float(2.71))]
+        )
+    );
+
+    let input = "foo[..][3.14](2.71)";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Expr::Call(
+            Box::new(Expr::Index(
+                Box::new(Expr::Index(
+                    Box::new(Expr::Identifier("foo")),
+                    Box::new(Expr::Range(None, None))
+                )),
+                Box::new(Expr::Literal(Literal::Float(3.14)))
+            )),
+            vec![Expr::Literal(Literal::Float(2.71))]
+        )
+    );
 }
 
 #[test]
@@ -1410,4 +1468,86 @@ fn type_alias_decl() {
             )
         }
     );
+}
+
+#[test]
+fn parse_range() {
+    let input = "0..10";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output(),
+        Some(&Expr::Range(
+            Some(Box::new(Expr::Literal(Literal::Integer(0)))),
+            Some(Box::new(Expr::Literal(Literal::Integer(10))))
+        ))
+    );
+
+    let input = "0..";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output(),
+        Some(&Expr::Range(
+            Some(Box::new(Expr::Literal(Literal::Integer(0)))),
+            None
+        ))
+    );
+
+    let input = "..10";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output(),
+        Some(&Expr::Range(
+            None,
+            Some(Box::new(Expr::Literal(Literal::Integer(10))))
+        ))
+    );
+
+    let input = "..";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output(), Some(&Expr::Range(None, None)));
+}
+
+#[test]
+fn parse_range_inclusive() {
+    let input = "0..=10";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output(),
+        Some(&Expr::RangeInclusive(
+            Some(Box::new(Expr::Literal(Literal::Integer(0)))),
+            Some(Box::new(Expr::Literal(Literal::Integer(10))))
+        ))
+    );
+
+    let input = "0..=";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output(),
+        Some(&Expr::RangeInclusive(
+            Some(Box::new(Expr::Literal(Literal::Integer(0)))),
+            None
+        ))
+    );
+
+    let input = "..=10";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output(),
+        Some(&Expr::RangeInclusive(
+            None,
+            Some(Box::new(Expr::Literal(Literal::Integer(10))))
+        ))
+    );
+
+    let input = "..=";
+    let result = Expr::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(result.output(), Some(&Expr::RangeInclusive(None, None)));
 }

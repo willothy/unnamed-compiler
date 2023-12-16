@@ -186,6 +186,8 @@ pub enum Expr<'a> {
         value: Option<Box<Expr<'a>>>,
     },
     StaticAccess(Box<Expr<'a>>, &'a str),
+    Range(Option<Box<Expr<'a>>>, Option<Box<Expr<'a>>>),
+    RangeInclusive(Option<Box<Expr<'a>>>, Option<Box<Expr<'a>>>),
 }
 
 impl<'a> Expr<'a> {
@@ -396,10 +398,6 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
             .boxed();
 
             let access = atom.pratt((
-                // range
-                postfix(3, just("..").ignore_then(expr.clone()), |lhs, rhs| {
-                    Expr::Binary(Box::new(lhs), BinaryOp::Range, Box::new(rhs))
-                }),
                 // index and call ops
                 postfix(
                     3,
@@ -487,7 +485,27 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                     .boxed();
             }
 
-            binary
+            let range = {
+                binary
+                    .clone()
+                    .or_not()
+                    .then_ignore(just("..").padded())
+                    .then(binary.clone().or_not())
+                    .map(|(start, end)| Expr::Range(start.map(Box::new), end.map(Box::new)))
+            };
+
+            let range_inclusive = {
+                binary
+                    .clone()
+                    .or_not()
+                    .then_ignore(just("..=").padded())
+                    .then(binary.clone().or_not())
+                    .map(|(start, end)| {
+                        Expr::RangeInclusive(start.map(Box::new), end.map(Box::new))
+                    })
+            };
+
+            range_inclusive.or(range).or(binary)
         })
     }
 }

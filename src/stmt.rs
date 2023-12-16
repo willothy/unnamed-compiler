@@ -67,7 +67,6 @@ pub enum BinaryOp {
     LessThan,
     NotEqual,
     Equal,
-    Range,
 }
 
 impl<'a> NodeParser<'a, BinaryOp> for BinaryOp {
@@ -91,7 +90,6 @@ impl<'a> NodeParser<'a, BinaryOp> for BinaryOp {
             just("<").map(|_| Self::LessThan),
             just("!=").map(|_| Self::NotEqual),
             just("==").map(|_| Self::Equal),
-            just("..").map(|_| Self::Range),
         ))
     }
 }
