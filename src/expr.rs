@@ -17,18 +17,6 @@ use crate::{
     NodeParser,
 };
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum VariantValue<'a> {
-    /// A unit variant with no attached data, e.g. `UnitVariant`
-    Unit,
-    /// A tuple-style variant, e.g. `TupleVariant(int, int)`
-    Tuple(Vec<TypeSignature<'a>>),
-    /// A struct-style variant, e.g. `StructVariant { field: int }`
-    Struct(BTreeMap<&'a str, TypeSignature<'a>>),
-    /// A variant with a single value, e.g. `CStyleVariant = 42`
-    Integer(i64),
-}
-
 /// Represents a literal value at parse level.
 #[derive(Debug, PartialEq)]
 pub enum Literal<'a> {
@@ -187,9 +175,6 @@ pub enum Expr<'a> {
     /// Rust-style loops work as expressions, but *must* yield a value
     /// if used as such.
     Loop(Box<Expr<'a>>),
-    /// Used to break out of a loop, e.g. `break;` or `break 42;`
-    /// The value is optional, and is only used if the loop is used as an expression.
-    Break(Option<Box<Expr<'a>>>),
     Match {
         value: Box<Expr<'a>>,
         arms: Vec<MatchArm<'a>>,
@@ -238,8 +223,12 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                 .map(|(lhs, rhs)| Stmt::Assignment(lhs, rhs));
 
             let r#return = keyword("return")
-                .ignore_then(expr.clone())
+                .ignore_then(expr.clone().or_not())
                 .map(Stmt::Return);
+
+            let r#break = keyword("break")
+                .then(expr.clone().or_not())
+                .map(|(_, val)| Stmt::Break(val));
 
             let block = recursive(|block| {
                 let r#while = keyword("while")
@@ -264,11 +253,11 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                 let stmt = choice((
                     assignment,
                     r#return,
+                    r#break,
                     r#while,
                     r#for,
                     expr.clone().map(Stmt::Expression),
                 ));
-                // , terminator
                 stmt.separated_by(just(";").padded())
                     .collect::<Vec<_>>()
                     .then(just(";").padded().or_not())
@@ -280,7 +269,13 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                                     let Stmt::Return(expr) = body.pop().unwrap() else {
                                         unreachable!();
                                     };
-                                    Some(Box::new(expr))
+                                    expr.map(Box::new)
+                                }
+                                Stmt::Break(_) => {
+                                    let Stmt::Break(expr) = body.pop().unwrap() else {
+                                        unreachable!();
+                                    };
+                                    expr.map(Box::new)
                                 }
                                 Stmt::Expression(_) if trailing.is_none() => {
                                     let Stmt::Expression(expr) = body.pop().unwrap() else {
@@ -316,10 +311,6 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                 .ignore_then(block.clone())
                 .map(Box::new)
                 .map(Expr::Loop);
-
-            let r#break = keyword("break")
-                .then(expr.clone().or_not())
-                .map(|(_, val)| Expr::Break(val.map(Box::new)));
 
             let r#if = recursive(|r#if| {
                 keyword("if")
@@ -387,7 +378,6 @@ impl<'a> NodeParser<'a, Self> for Expr<'a> {
                 r#let,
                 r#loop,
                 r#if,
-                r#break,
                 r#match,
                 array,
                 unit,

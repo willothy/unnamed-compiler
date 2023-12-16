@@ -3,6 +3,7 @@ use std::{borrow::Cow, collections::BTreeMap};
 use chumsky::{IterParser, Parser};
 use crane::{
     expr::{Expr, Literal},
+    module::{Declaration, Variant},
     stmt::{BinaryOp, Stmt, UnaryOp},
     ty::{TypePath, TypePathSegment, TypeSignature},
     NodeParser as _,
@@ -899,5 +900,486 @@ fn test_static_member_access() {
             Box::new(Expr::StaticAccess(Box::new(Expr::Identifier("foo")), "bar")),
             "baz"
         )
+    );
+}
+
+#[test]
+fn test_declarations() {
+    // top-level declarations
+    let input = "fn foo() {}";
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Function {
+            name: "foo",
+            generic_params: None,
+            params: vec![],
+            ret: None,
+            body: Expr::Block {
+                body: vec![],
+                terminator: None
+            },
+        }
+    );
+
+    let input = "fn foo() int { 42 }";
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Function {
+            name: "foo",
+            generic_params: None,
+            params: vec![],
+            ret: Some(TypeSignature::Named(TypePath {
+                name: "int",
+                path: None
+            })),
+            body: Expr::Block {
+                body: vec![],
+                terminator: Some(Box::new(Expr::Literal(Literal::Integer(42))))
+            },
+        }
+    );
+
+    let input = "const foo: int = 42";
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Constant {
+            name: "foo",
+            ty: TypeSignature::Named(TypePath {
+                name: "int",
+                path: None
+            }),
+            value: Expr::Literal(Literal::Integer(42)),
+        }
+    );
+
+    let input = "static foo: int = 42";
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Static {
+            name: "foo",
+            ty: TypeSignature::Named(TypePath {
+                name: "int",
+                path: None
+            }),
+            value: Expr::Literal(Literal::Integer(42)),
+        }
+    );
+
+    let input = "struct Foo {}";
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Struct {
+            name: "Foo",
+            generic_params: None,
+            value: Variant::Struct(BTreeMap::new()),
+        }
+    );
+}
+
+#[test]
+fn struct_decl() {
+    let input = r#"struct Foo {
+        bar: int,
+        baz: bool,
+    }
+"#;
+
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Declaration::Struct {
+            name: "Foo",
+            generic_params: None,
+            value: Variant::Struct(BTreeMap::from_iter([
+                (
+                    "bar",
+                    TypeSignature::Named(TypePath {
+                        name: "int",
+                        path: None
+                    })
+                ),
+                (
+                    "baz",
+                    TypeSignature::Named(TypePath {
+                        name: "bool",
+                        path: None
+                    })
+                )
+            ]))
+        }
+    );
+
+    let input = r#"struct Foo"#;
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Declaration::Struct {
+            generic_params: None,
+            name: "Foo",
+            value: Variant::Unit
+        }
+    );
+
+    let input = r#"struct Foo {}"#;
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Declaration::Struct {
+            generic_params: None,
+            name: "Foo",
+            value: Variant::Struct(BTreeMap::new())
+        }
+    );
+
+    let input = "struct Foo(int, bool)";
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Declaration::Struct {
+            name: "Foo",
+            generic_params: None,
+            value: Variant::Tuple(vec![
+                TypeSignature::Named(TypePath {
+                    name: "int",
+                    path: None
+                }),
+                TypeSignature::Named(TypePath {
+                    name: "bool",
+                    path: None
+                })
+            ])
+        }
+    );
+}
+
+#[test]
+fn enum_decl() {
+    let input = r#"enum Foo {
+        Bar,
+        Baz,
+    }"#;
+
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Enum {
+            name: "Foo",
+            generic_params: None,
+            variants: vec![("Bar", Variant::Unit), ("Baz", Variant::Unit),]
+        }
+    );
+
+    let input = r#"enum Foo {
+        Bar(int),
+        Baz(int, bool),
+    }"#;
+
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Enum {
+            name: "Foo",
+            generic_params: None,
+            variants: vec![
+                (
+                    "Bar",
+                    Variant::Tuple(vec![TypeSignature::Named(TypePath {
+                        name: "int",
+                        path: None
+                    })])
+                ),
+                (
+                    "Baz",
+                    Variant::Tuple(vec![
+                        TypeSignature::Named(TypePath {
+                            name: "int",
+                            path: None
+                        }),
+                        TypeSignature::Named(TypePath {
+                            name: "bool",
+                            path: None
+                        })
+                    ])
+                ),
+            ]
+        }
+    );
+
+    let input = r#"enum Foo {
+        Foo,
+        Bar(int),
+        Baz { baz: int, qux: bool },
+    }"#;
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Enum {
+            name: "Foo",
+            generic_params: None,
+            variants: vec![
+                ("Foo", Variant::Unit),
+                (
+                    "Bar",
+                    Variant::Tuple(vec![TypeSignature::Named(TypePath {
+                        name: "int",
+                        path: None
+                    })])
+                ),
+                (
+                    "Baz",
+                    Variant::Struct(BTreeMap::from_iter([
+                        (
+                            "baz",
+                            TypeSignature::Named(TypePath {
+                                name: "int",
+                                path: None
+                            })
+                        ),
+                        (
+                            "qux",
+                            TypeSignature::Named(TypePath {
+                                name: "bool",
+                                path: None
+                            })
+                        )
+                    ]))
+                ),
+            ]
+        }
+    );
+
+    // generics
+    let input = r#"enum Foo<T> {
+        Foo,
+        Bar(T),
+        Baz { baz: T, qux: bool },
+    }"#;
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Enum {
+            name: "Foo",
+            generic_params: Some(vec!["T"]),
+            variants: vec![
+                ("Foo", Variant::Unit),
+                (
+                    "Bar",
+                    Variant::Tuple(vec![TypeSignature::Named(TypePath {
+                        name: "T",
+                        path: None
+                    })])
+                ),
+                (
+                    "Baz",
+                    Variant::Struct(BTreeMap::from_iter([
+                        (
+                            "baz",
+                            TypeSignature::Named(TypePath {
+                                name: "T",
+                                path: None
+                            })
+                        ),
+                        (
+                            "qux",
+                            TypeSignature::Named(TypePath {
+                                name: "bool",
+                                path: None
+                            })
+                        )
+                    ]))
+                ),
+            ]
+        }
+    )
+}
+
+#[test]
+fn const_decl() {
+    let input = r#"const Foo: int = 1"#;
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Constant {
+            name: "Foo",
+            ty: TypeSignature::Named(TypePath {
+                name: "int",
+                path: None
+            }),
+            value: Expr::Literal(Literal::Integer(1))
+        }
+    );
+
+    let input = r#"const FOO: HashMap<Bar, Baz> = HashMap::new()"#;
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Constant {
+            name: "FOO",
+            ty: TypeSignature::GenericApplication(
+                TypePath {
+                    name: "HashMap",
+                    path: None
+                },
+                vec![
+                    TypeSignature::Named(TypePath {
+                        name: "Bar",
+                        path: None
+                    }),
+                    TypeSignature::Named(TypePath {
+                        name: "Baz",
+                        path: None
+                    }),
+                ]
+            ),
+            value: Expr::Call(
+                Box::new(Expr::StaticAccess(
+                    Box::new(Expr::Identifier("HashMap")),
+                    "new"
+                )),
+                vec![]
+            )
+        }
+    );
+}
+
+#[test]
+fn function_decl() {
+    let input = r#"fn foo() int { 5 }"#;
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Function {
+            name: "foo",
+            generic_params: None,
+            params: vec![],
+            ret: Some(TypeSignature::Named(TypePath {
+                name: "int",
+                path: None
+            })),
+            body: Expr::Block {
+                body: vec![],
+                terminator: Some(Box::new(Expr::Literal(Literal::Integer(5))))
+            }
+        }
+    );
+
+    let input = r#"fn foo(bar: int) int { bar }"#;
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::Function {
+            name: "foo",
+            generic_params: None,
+            params: vec![(
+                "bar",
+                TypeSignature::Named(TypePath {
+                    name: "int",
+                    path: None
+                })
+            )],
+            ret: Some(TypeSignature::Named(TypePath {
+                name: "int",
+                path: None
+            })),
+            body: Expr::Block {
+                body: vec![],
+                terminator: Some(Box::new(Expr::Identifier("bar")))
+            }
+        }
+    );
+
+    // generics
+    let input = r#"fn foo<T>(bar: T) T { bar }"#;
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Declaration::Function {
+            name: "foo",
+            generic_params: Some(vec!["T"]),
+            params: vec![(
+                "bar",
+                TypeSignature::Named(TypePath {
+                    name: "T",
+                    path: None
+                })
+            )],
+            ret: Some(TypeSignature::Named(TypePath {
+                name: "T",
+                path: None
+            })),
+            body: Expr::Block {
+                body: vec![],
+                terminator: Some(Box::new(Expr::Identifier("bar")))
+            }
+        }
+    );
+}
+
+#[test]
+fn type_alias_decl() {
+    let input = r#"type Foo = int"#;
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        result.output().unwrap(),
+        &Declaration::TypeAlias {
+            name: "Foo",
+            generic_params: None,
+            ty: TypeSignature::Named(TypePath {
+                name: "int",
+                path: None
+            })
+        }
+    );
+
+    let input = r#"type Foo<T> = HashMap<T, int>"#;
+    let result = Declaration::parser().parse(input);
+    assert!(!result.has_errors(), "{:#?}", result.into_errors());
+    assert_eq!(
+        *result.output().unwrap(),
+        Declaration::TypeAlias {
+            name: "Foo",
+            generic_params: Some(vec!["T"]),
+            ty: TypeSignature::GenericApplication(
+                TypePath {
+                    name: "HashMap",
+                    path: None
+                },
+                vec![
+                    TypeSignature::Named(TypePath {
+                        name: "T",
+                        path: None
+                    }),
+                    TypeSignature::Named(TypePath {
+                        name: "int",
+                        path: None
+                    })
+                ]
+            )
+        }
     );
 }

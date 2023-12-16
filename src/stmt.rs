@@ -11,8 +11,6 @@ use crate::{expr::Expr, NodeParser};
 pub enum Stmt<'a> {
     /// An assignment, e.g. `x = 42;` or `let Point { x, y } = point;`
     Assignment(Expr<'a>, Expr<'a>),
-    /// A return statement
-    Return(Expr<'a>),
     /// An expression statement.
     Expression(Expr<'a>),
     /// While loops cannot be used as expressions because their resulting value cannot be
@@ -24,12 +22,16 @@ pub enum Stmt<'a> {
         iter: Expr<'a>,
         body: Expr<'a>,
     },
+    /// A return statement
+    Return(Option<Expr<'a>>),
+    /// A break statement, e.g. `break;` or `break 42;`
+    Break(Option<Expr<'a>>),
 }
 
 impl<'a> Stmt<'a> {
     pub fn is_terminator(&self) -> bool {
         match self {
-            Stmt::Return(_) => true,
+            Stmt::Return(_) | Stmt::Break(_) => true,
             Stmt::Expression(_) => true,
             Stmt::Assignment(_, _) | Stmt::While { .. } | Stmt::For { .. } => false,
         }
